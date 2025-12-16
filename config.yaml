@@ -1,0 +1,7 @@
+pair: BTC/USDT
+exchange: binance
+testnet: true
+grid_levels: 10
+lower_price: 30000.0
+upper_price: 47000.0
+amount_per_grid: 100.0

@@ -1,0 +1,13 @@
+# Python compilation
+__pycache__/
+*.py[cod]
+
+# Environment variables (CRITICAL)
+.env
+
+# IDE settings
+.vscode/
+.idea/
+
+# OS specific
+.DS_Store
