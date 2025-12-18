@@ -30,19 +30,31 @@ class GridBot:
         self.config = self.load_config(config_path)
         self.symbol = str(self.config["symbol"])
         self.order_size = float(self.config["order_size"])
+        self.grid_levels = int(self.config["grid_levels"])
+        self.lower_price = float(self.config["lower_price"])
+        self.upper_price = float(self.config["upper_price"])
+        self.grid_type = str(self.config.get("grid_type", "arithmetic"))
+        self.trailing_up = bool(self.config["trailing_up"])
+        self.stop_loss_enabled = bool(self.config["stop_loss_enabled"])
+        self.status = "RUNNING"
 
         self.exchange = self.init_exchange()
-        self.calculator = GridCalculator(
-            lower_price=float(self.config["lower_price"]),
-            upper_price=float(self.config["upper_price"]),
-            grid_levels=int(self.config["grid_levels"]),
-        )
-        self.grid_step = (self.calculator.upper_price - self.calculator.lower_price) / self.calculator.grid_levels
 
         self.db_path = Path(db_path)
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self._init_db()
+
+        self._load_bot_state()
+
+        self.calculator = GridCalculator(
+            lower_price=self.lower_price,
+            upper_price=self.upper_price,
+            grid_levels=self.grid_levels,
+            grid_type=self.grid_type,
+        )
+        self.grid_step = self.calculator.step
+        self.grid_ratio = self.calculator.ratio
 
     @staticmethod
     def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
@@ -65,6 +77,9 @@ class GridBot:
         data["upper_price"] = float(data["upper_price"])
         data["grid_levels"] = int(data["grid_levels"])
         data["order_size"] = float(data["order_size"])
+        data["trailing_up"] = bool(data.get("trailing_up", False))
+        data["stop_loss_enabled"] = bool(data.get("stop_loss_enabled", True))
+        data["grid_type"] = str(data.get("grid_type", "arithmetic")).lower()
         return data
 
     @staticmethod
@@ -116,6 +131,38 @@ class GridBot:
                     fee_estimated REAL NOT NULL
                 )
                 """
+            )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bot_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    lower_price REAL NOT NULL,
+                    upper_price REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'RUNNING'
+                )
+                """
+            )
+            # Attempt to backfill status column if upgrading
+            try:
+                self.conn.execute("ALTER TABLE bot_state ADD COLUMN status TEXT NOT NULL DEFAULT 'RUNNING'")
+            except sqlite3.OperationalError:
+                pass
+
+    def _load_bot_state(self) -> None:
+        """Load persisted price range if available."""
+        cursor = self.conn.execute("SELECT lower_price, upper_price, status FROM bot_state WHERE id = 1")
+        row = cursor.fetchone()
+        if row:
+            self.lower_price = float(row["lower_price"])
+            self.upper_price = float(row["upper_price"])
+            self.status = str(row["status"]) if "status" in row.keys() else "RUNNING"
+
+    def _save_bot_state(self) -> None:
+        """Persist current price range so trailing survives restarts."""
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO bot_state (id, lower_price, upper_price, status) VALUES (1, ?, ?, ?)",
+                (self.lower_price, self.upper_price, self.status),
             )
 
     def load_active_orders(self) -> List[Dict[str, Any]]:
@@ -302,6 +349,106 @@ class GridBot:
 
         return status, fill_price, filled_amount
 
+    def check_trailing(self, current_price: Optional[float]) -> None:
+        """Shift the grid upward during strong uptrend when enabled."""
+        if not self.trailing_up or current_price is None:
+            return
+
+        if self.grid_ratio:
+            trigger_price = self.upper_price * self.grid_ratio
+        else:
+            trigger_price = self.upper_price + (self.grid_step or 0)
+        if current_price <= trigger_price:
+            return
+
+        if self.grid_ratio:
+            new_lower = round(self.lower_price * self.grid_ratio, 10)
+            new_upper = round(self.upper_price * self.grid_ratio, 10)
+        else:
+            new_lower = round(self.lower_price + (self.grid_step or 0), 10)
+            new_upper = round(self.upper_price + (self.grid_step or 0), 10)
+
+        orders = self.load_active_orders()
+        lowest_buy: Optional[Dict[str, Any]] = None
+        for order in orders:
+            if order["side"].lower() != "buy":
+                continue
+            if lowest_buy is None or order["price"] < lowest_buy["price"]:
+                lowest_buy = order
+
+        if lowest_buy:
+            cancelled = False
+            if self.dry_run:
+                cancelled = True
+            else:
+                try:
+                    self.exchange.cancel_order(lowest_buy["id"], self.symbol)
+                    cancelled = True
+                except ccxt.NetworkError as exc:
+                    print(f"[WARN] Problem sieci podczas anulowania {lowest_buy['id']}: {exc}")
+                    time.sleep(1)
+                except Exception as exc:  # pragma: no cover
+                    print(f"[WARN] Nie udalo sie anulowac {lowest_buy['id']}: {exc}")
+            if cancelled:
+                try:
+                    with self.conn:
+                        self.conn.execute("DELETE FROM active_orders WHERE id = ?", (lowest_buy["id"],))
+                    orders = [o for o in orders if o["id"] != lowest_buy["id"]]
+                except Exception as exc:  # pragma: no cover
+                    print(f"[WARN] Nie udalo sie usunac dolnego zlecenia {lowest_buy['id']}: {exc}")
+                    return
+            else:
+                return
+
+        new_sell = self.create_limit_order("sell", new_upper, self.order_size)
+        if new_sell:
+            orders.append(new_sell)
+
+        self.lower_price = new_lower
+        self.upper_price = new_upper
+        self.calculator = GridCalculator(
+            lower_price=self.lower_price,
+            upper_price=self.upper_price,
+            grid_levels=self.grid_levels,
+            grid_type=self.grid_type,
+        )
+        self.grid_step = self.calculator.step
+        self.grid_ratio = self.calculator.ratio
+        self._save_bot_state()
+        self.save_active_orders(orders)
+        print(f"[TRAILING] Przesunieto siatke w gore do zakresu {new_lower}-{new_upper}")
+
+    def panic_sell(self, current_price: float) -> None:
+        """Execute stop-loss: cancel orders, liquidate base, mark bot stopped."""
+        print("[ALARM] Cena przebiła dolny zakres! Wykonano Panic Sell. Kapitał zabezpieczony w USDT.")
+        active_orders = self.load_active_orders()
+        if not self.dry_run:
+            for order in active_orders:
+                try:
+                    self.exchange.cancel_order(order["id"], self.symbol)
+                except Exception as exc:  # pragma: no cover
+                    print(f"[WARN] Nie udalo sie anulowac zlecenia {order['id']}: {exc}")
+        with self.conn:
+            self.conn.execute("DELETE FROM active_orders")
+
+        base_currency = self.symbol.split("/")[0]
+        if not self.dry_run:
+            try:
+                balance = self.exchange.fetch_balance()
+                base_free = float(balance.get(base_currency, {}).get("free", 0) or 0)
+            except Exception as exc:  # pragma: no cover
+                base_free = 0.0
+                print(f"[WARN] Nie udalo sie pobrac balansu do panic sell: {exc}")
+            if base_free > 0:
+                try:
+                    self.exchange.create_order(self.symbol, "market", "sell", base_free)
+                    print(f"[LIVE] Sprzedano {base_free} {base_currency} po cenie rynkowej")
+                except Exception as exc:  # pragma: no cover
+                    print(f"[WARN] Nie udalo sie zrealizowac panic sell: {exc}")
+
+        self.status = "STOPPED"
+        self._save_bot_state()
+
     def monitor_grid(
         self,
         current_price: float,
@@ -341,9 +488,14 @@ class GridBot:
             self.log_trade(trade_data)
 
             opposite_side = "sell" if order["side"].lower() == "buy" else "buy"
-            new_price = round(order["price"] + self.grid_step, 10) if order["side"].lower() == "buy" else round(
-                order["price"] - self.grid_step, 10
-            )
+            if self.grid_ratio:
+                new_price = round(order["price"] * self.grid_ratio, 10) if order["side"].lower() == "buy" else round(
+                    order["price"] / self.grid_ratio, 10
+                )
+            else:
+                new_price = round(order["price"] + (self.grid_step or 0), 10) if order["side"].lower() == "buy" else round(
+                    order["price"] - (self.grid_step or 0), 10
+                )
 
             new_order = self.create_limit_order(opposite_side, new_price, self.order_size)
 
@@ -391,9 +543,13 @@ class GridBot:
         if current_price is None:
             return
 
-        grid_range = float(self.config["upper_price"]) - float(self.config["lower_price"])
-        profit_percent = (grid_range / int(self.config["grid_levels"])) / current_price
-        print(f"[INFO] Siatka: skok co {grid_range / int(self.config['grid_levels']):.2f} (~{profit_percent*100:.4f}%)")
+        if self.grid_ratio:
+            profit_percent = (self.grid_ratio - 1)
+            print(f"[INFO] Siatka (geometric): krok ~{profit_percent*100:.4f}%")
+        else:
+            grid_range = float(self.upper_price) - float(self.lower_price)
+            profit_percent = (grid_range / self.grid_levels) / current_price
+            print(f"[INFO] Siatka: skok co {grid_range / self.grid_levels:.2f} (~{profit_percent*100:.4f}%)")
         if profit_percent < 0.002:
             print("\n" + "!" * 50)
             print(
@@ -427,6 +583,10 @@ class GridBot:
         while True:
             price = self.fetch_current_price()
             if price is not None:
+                if self.stop_loss_enabled and price < self.lower_price:
+                    self.panic_sell(price)
+                    break
+                self.check_trailing(price)
                 active_orders = self.monitor_grid(price)
                 print(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
             time.sleep(10)

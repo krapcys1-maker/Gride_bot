@@ -1,5 +1,10 @@
 symbol: "BTC/USDT"
-lower_price: 80000.0
-upper_price: 100000.0
-grid_levels: 15
+grid_type: "geometric" # Uczciwa matematyka
+
+lower_price: 50000.0   # Twój beton. Poniżej tego bot sprzeda wszystko (Stop Loss).
+upper_price: 130000.0  # Zapas na "Moon"
+grid_levels: 80        # Daje ~1.2% odstępu między poziomami (optymalnie dla swingów)
+
 order_size: 0.0001
+trailing_up: true      # Jak przebije 130k, siatka pójdzie w górę
+stop_loss_enabled: true # Bezpiecznik na 50k

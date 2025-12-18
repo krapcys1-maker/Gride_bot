@@ -34,6 +34,9 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
     parsed["upper_price"] = upper
     parsed["grid_levels"] = levels
     parsed["amount_per_grid"] = float(parsed["amount_per_grid"])
+    parsed["grid_type"] = str(parsed.get("grid_type", "arithmetic")).lower()
+    if parsed["grid_type"] not in ("arithmetic", "geometric"):
+        raise ValueError("grid_type must be 'arithmetic' or 'geometric'")
     parsed.setdefault("testnet", False)
     return parsed
 
