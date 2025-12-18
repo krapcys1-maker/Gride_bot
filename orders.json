@@ -1,0 +1,50 @@
+[
+    {
+        "id": "sim_BTC/USDT_80000.0",
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "price": 80000.0,
+        "amount": 0.0001,
+        "exchange": "kucoin"
+    },
+    {
+        "id": "sim_BTC/USDT_84000.0",
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "price": 84000.0,
+        "amount": 0.0001,
+        "exchange": "kucoin"
+    },
+    {
+        "id": "sim_BTC/USDT_92000.0",
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "price": 92000.0,
+        "amount": 0.0001,
+        "exchange": "kucoin"
+    },
+    {
+        "id": "sim_BTC/USDT_96000.0",
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "price": 96000.0,
+        "amount": 0.0001,
+        "exchange": "kucoin"
+    },
+    {
+        "id": "sim_BTC/USDT_100000.0",
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "price": 100000.0,
+        "amount": 0.0001,
+        "exchange": "kucoin"
+    },
+    {
+        "id": "sim_BTC/USDT_88000.0",
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "price": 88000.0,
+        "amount": 0.0001,
+        "exchange": "kucoin"
+    }
+]
