@@ -14,6 +14,7 @@ class RiskConfig:
     amplitude_pct: float = 1.0
     noise_pct: float = 0.5
     period_steps: int = 24
+    risk_action: str = "EXIT"
 
 
 class RiskEngine:

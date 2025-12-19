@@ -1,0 +1,30 @@
+{
+  "config_path": "tests\\fixtures\\config_batch.yaml",
+  "config_hash": "d5e4ab8e758878f1a5eb6c56ca5e65fc1874de7c",
+  "offline": true,
+  "scenario": "range",
+  "seed": 2,
+  "status": "COMPLETED",
+  "reason": "max_steps",
+  "steps": 1000,
+  "steps_completed": 1000,
+  "start": "2025-12-19T12:06:03.396200",
+  "end": "2025-12-19T12:06:14.704975",
+  "metrics": {
+    "price": 88430.74424663192,
+    "equity": 1032.8099966929817,
+    "pnl": 28.92252878518525,
+    "peak_equity": 1036.5292749619007,
+    "drawdown_pct": 0.3588203786193765,
+    "trades": 255,
+    "total_fees": 22.469662140085376
+  },
+  "accounting_skips": {
+    "skipped_sell_no_base": 0,
+    "skipped_buy_no_quote": 0
+  },
+  "run_id": "classic_grid_range_seed2",
+  "strategy_id": "classic_grid",
+  "error_type": "",
+  "error_message": ""
+}

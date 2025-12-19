@@ -1,0 +1,30 @@
+{
+  "config_path": "tests\\fixtures\\config_batch.yaml",
+  "config_hash": "d5e4ab8e758878f1a5eb6c56ca5e65fc1874de7c",
+  "offline": true,
+  "scenario": "flash_crash",
+  "seed": 3,
+  "status": "STOPPED",
+  "reason": "max_drawdown",
+  "steps": 98,
+  "steps_completed": 98,
+  "start": "2025-12-19T12:02:31.050427",
+  "end": "2025-12-19T12:02:32.150849",
+  "metrics": {
+    "price": 88001.6058387674,
+    "equity": 1001.5455120582587,
+    "pnl": 0.06500018830479348,
+    "peak_equity": 1001.8019537332386,
+    "drawdown_pct": 0.025598041012423724,
+    "trades": 1,
+    "total_fees": 0.0879772697916911
+  },
+  "accounting_skips": {
+    "skipped_sell_no_base": 0,
+    "skipped_buy_no_quote": 0
+  },
+  "run_id": "classic_grid_flash_crash_seed3",
+  "strategy_id": "classic_grid",
+  "error_type": "",
+  "error_message": ""
+}

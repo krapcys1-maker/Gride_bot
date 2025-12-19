@@ -2,7 +2,14 @@ from gridbot.core.accounting import Accounting, AccountingConfig
 
 
 def test_buy_sell_updates_balances_and_equity():
-    acct = Accounting(AccountingConfig(initial_usdt=1000.0, initial_base=0.0, fee_rate=0.001))
+    acct = Accounting(
+        AccountingConfig(
+            initial_usdt=1000.0,
+            initial_base=0.0,
+            fee_rate=0.001,
+            maker_fee_bps=10.0,
+        )
+    )
     ok, fee, eq = acct.on_fill("buy", price=100.0, qty=2.0)
     assert ok
     assert round(acct.base_qty, 6) == 2.0

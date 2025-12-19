@@ -84,6 +84,7 @@ class GridBot:
         self.steps_completed = 0
         self.trade_count = 0
         self.total_fees = 0.0
+        self.total_slippage = 0.0
         self.initial_equity: Optional[float] = None
         self.strategy_id = self.config.get("strategy_id", "classic_grid")
         StrategyCls = get_strategy(self.strategy_id)
@@ -98,6 +99,10 @@ class GridBot:
                 pause_seconds=float(risk_cfg.get("pause_seconds", 60)),
                 max_drawdown_pct=float(risk_cfg.get("max_drawdown_pct", 10.0)),
                 panic_on_stop=bool(risk_cfg.get("panic_on_stop", True)),
+                risk_action=str(risk_cfg.get("risk_action", "EXIT")).upper(),
+                amplitude_pct=float(risk_cfg.get("amplitude_pct", 1.0)),
+                noise_pct=float(risk_cfg.get("noise_pct", 0.5)),
+                period_steps=int(risk_cfg.get("period_steps", 24)),
             )
         )
 
@@ -576,6 +581,20 @@ class GridBot:
             equity_after = None
             fee_used = None
             if self.accounting:
+                # simulate spread/slippage and maker fee
+                base_price = float(order["price"])
+                spread_bps = float(self.accounting.config.spread_bps)
+                slippage_bps = float(self.accounting.config.slippage_bps)
+                half_spread = base_price * (spread_bps / 20000)
+                slippage = base_price * (slippage_bps / 10000)
+                if order["side"].lower() == "buy":
+                    execution_price = base_price + half_spread + slippage
+                else:
+                    execution_price = base_price - half_spread - slippage
+                trade_value = round(execution_price * filled_amount, 10)
+                trade_data["price"] = execution_price
+                trade_data["value"] = trade_value
+                slippage_cost = abs(execution_price - base_price) * filled_amount
                 ok, fee, equity_after = self.accounting.on_fill(order["side"], execution_price, filled_amount)
                 if not ok:
                     try:
@@ -586,6 +605,7 @@ class GridBot:
                     modified = True
                     continue
                 fee_used = fee
+                self.total_slippage += slippage_cost
             if fee_used is None:
                 fee_used = trade_data["fee_estimated"]
             trade_data["fee"] = fee_used
@@ -718,7 +738,7 @@ class GridBot:
                     self._paused_logged = False
 
             if self.status == "STOPPED":
-                if self.risk_engine.config.panic_on_stop:
+                if self.risk_engine.config.panic_on_stop and self.risk_engine.config.risk_action != "PAUSE":
                     self._panic_clear_orders()
                 break
 
@@ -794,6 +814,7 @@ class GridBot:
                     break
             steps += 1
             self.steps_executed = steps
+            self.steps_completed = steps
             if max_steps is not None and steps >= max_steps:
                 logger.info(f"Reached max steps ({max_steps}); exiting.")
                 if self.status == "RUNNING":
@@ -834,6 +855,8 @@ class GridBot:
                 "skipped_sell_no_base": self.accounting.skipped_sell_no_base,
                 "skipped_buy_no_quote": self.accounting.skipped_buy_no_quote,
             }
+        if self.status == "STOPPED" and self.risk_engine.config.risk_action == "PAUSE" and self.stop_reason == "panic_sell":
+            self.stop_reason = "panic_pause"
         report = {
             "config_path": str(self.config_path),
             "config_hash": self._config_hash(),
@@ -850,10 +873,14 @@ class GridBot:
                 "price": price,
                 "equity": equity,
                 "pnl": pnl,
+                "pnl_net": pnl,
+                "pnl_gross": (pnl + self.total_fees + self.total_slippage) if pnl is not None else None,
                 "peak_equity": peak,
                 "drawdown_pct": dd_pct,
                 "trades": self.trade_count,
                 "total_fees": self.total_fees,
+                "total_slippage": self.total_slippage,
+                "slippage_spread_cost_est": self.total_slippage,
             },
             "accounting_skips": accounting_skips,
         }

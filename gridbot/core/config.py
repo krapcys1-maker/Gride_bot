@@ -42,6 +42,7 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
         "amplitude_pct": float(risk_cfg.get("amplitude_pct", 1.0)),
         "noise_pct": float(risk_cfg.get("noise_pct", 0.5)),
         "period_steps": int(risk_cfg.get("period_steps", 24)),
+        "risk_action": str(risk_cfg.get("risk_action", "EXIT")).upper(),
     }
     if data["risk"]["max_consecutive_errors"] < 1:
         data["risk"]["max_consecutive_errors"] = 1
@@ -54,6 +55,9 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
         "initial_base": float(acct_cfg.get("initial_base", 0.0)),
         "fee_rate": float(acct_cfg.get("fee_rate", 0.001)),
         "slippage_bps": float(acct_cfg.get("slippage_bps", 0.0)),
+        "spread_bps": float(acct_cfg.get("spread_bps", 0.0)),
+        "maker_fee_bps": float(acct_cfg.get("maker_fee_bps", 0.0)),
+        "taker_fee_bps": float(acct_cfg.get("taker_fee_bps", 0.0)),
     }
     data["strategy_id"] = str(data.get("strategy_id", "classic_grid"))
     data["offline"] = bool(data.get("offline", False))

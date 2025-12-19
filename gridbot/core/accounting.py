@@ -13,6 +13,9 @@ class AccountingConfig:
     initial_base: float = 0.0
     fee_rate: float = 0.001
     slippage_bps: float = 0.0
+    spread_bps: float = 0.0
+    maker_fee_bps: float = 0.0
+    taker_fee_bps: float = 0.0
 
 
 class Accounting:
@@ -33,7 +36,8 @@ class Accounting:
         return self.quote_qty + self.base_qty * price
 
     def apply_fee(self, value: float) -> float:
-        return value * self.config.fee_rate
+        fee_rate = self.config.maker_fee_bps / 10000
+        return value * fee_rate
 
     def on_fill(self, side: str, price: float, qty: float) -> Tuple[bool, float, float]:
         side_l = side.lower()
