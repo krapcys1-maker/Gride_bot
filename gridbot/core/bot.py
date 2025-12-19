@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 import random
@@ -15,6 +16,9 @@ from grid_logic import GridCalculator
 from .config import CONFIG_FILE, DB_FILE, DRY_RUN, load_config
 from .exchange import init_exchange
 from .storage import Storage
+
+
+logger = logging.getLogger(__name__)
 
 
 class GridBot:
@@ -207,7 +211,7 @@ class GridBot:
     def _next_offline_price(self) -> Optional[float]:
         if not self._offline_price_cycle:
             if not getattr(self, "_offline_feed_warned", False):
-                print("[WARN] Offline mode: no price feed available (offline_prices or data/offline_prices.csv).")
+                logger.warning("Offline mode: no price feed available (offline_prices or data/offline_prices.csv).")
                 self._offline_feed_warned = True
             self._offline_feed_exhausted = True
             return None
@@ -216,7 +220,7 @@ class GridBot:
         except StopIteration:
             self._offline_feed_exhausted = True
             if not getattr(self, "_offline_feed_warned", False):
-                print("[WARN] Offline mode: price feed exhausted.")
+                logger.warning("Offline mode: price feed exhausted.")
                 self._offline_feed_warned = True
             return None
 
@@ -243,7 +247,7 @@ class GridBot:
         if self.dry_run:
             # unikalne id potrzebne, bo active_orders.id jest PRIMARY KEY w SQLite
             order_id = f"sim_{side}_{self.symbol}_{uuid4().hex}"
-            print(f"[DRY RUN] plan zlecenia {side} {amount} {self.symbol} po cenie {price}")
+            logger.debug(f"[DRY RUN] plan zlecenia {side} {amount} {self.symbol} po cenie {price}")
             return {
                 "id": order_id,
                 "symbol": self.symbol,
@@ -272,7 +276,7 @@ class GridBot:
                     order_timestamp = str(order.get("datetime") or now_ts)
 
                 status = order.get("status") or "open"
-                print(f"[LIVE] Zlozono zlecenie {order_id}: {side} {amount} {self.symbol} @ {price}")
+                logger.info(f"[LIVE] Zlozono zlecenie {order_id}: {side} {amount} {self.symbol} @ {price}")
                 return {
                     "id": str(order_id),
                     "symbol": self.symbol,
@@ -284,16 +288,16 @@ class GridBot:
                     "timestamp": order_timestamp,
                 }
             except ccxt.InsufficientFunds as exc:
-                print(f"[CRITICAL] Brak srodkow dla zlecenia {side} {amount}@{price}: {exc}")
+                logger.critical(f"Brak srodkow dla zlecenia {side} {amount}@{price}: {exc}")
                 return None
             except ccxt.NetworkError as exc:
                 attempts += 1
-                print(f"[WARN] Problem sieci podczas skladania zlecenia {side} {amount}@{price}: {exc}")
+                logger.warning(f"Problem sieci podczas skladania zlecenia {side} {amount}@{price}: {exc}")
                 time.sleep(1)
                 if attempts >= 2:
                     return None
             except Exception as exc:  # pragma: no cover
-                print(f"[ERROR] Nie udalo sie zlozyc zlecenia {side} {amount}@{price}: {exc}")
+                logger.error(f"Nie udalo sie zlozyc zlecenia {side} {amount}@{price}: {exc}")
                 return None
 
         return None
@@ -301,6 +305,8 @@ class GridBot:
     def place_initial_grid(self, current_price: float) -> List[Dict[str, Any]]:
         """Simulate placing the initial grid and return the order plan."""
         orders: List[Dict[str, Any]] = []
+        buys = 0
+        sells = 0
         for level in self.calculator.calculate_levels():
             if level == current_price:
                 continue
@@ -308,9 +314,14 @@ class GridBot:
             created = self.create_limit_order(side, level, self.order_size)
             if created:
                 orders.append(created)
+                if side == "buy":
+                    buys += 1
+                else:
+                    sells += 1
         if orders:
             self.save_active_orders(orders)
-            print(f"Siatka zainicjowana. Zapisano {len(orders)} zlecen")
+            logger.info(f"Siatka zainicjowana. Planned/placed {buys} buy and {sells} sell orders")
+            logger.debug(f"Szczegoly zlecen: {orders}")
         return orders
 
     def check_order_status(
@@ -392,16 +403,16 @@ class GridBot:
                     self.exchange.cancel_order(lowest_buy["id"], self.symbol)
                     cancelled = True
                 except ccxt.NetworkError as exc:
-                    print(f"[WARN] Problem sieci podczas anulowania {lowest_buy['id']}: {exc}")
+                    logger.warning(f"Problem sieci podczas anulowania {lowest_buy['id']}: {exc}")
                     time.sleep(1)
                 except Exception as exc:  # pragma: no cover
-                    print(f"[WARN] Nie udalo sie anulowac {lowest_buy['id']}: {exc}")
+                    logger.warning(f"Nie udalo sie anulowac {lowest_buy['id']}: {exc}")
             if cancelled:
                 try:
                     self.storage.delete_active_order(lowest_buy["id"])
                     orders = [o for o in orders if o["id"] != lowest_buy["id"]]
                 except Exception as exc:  # pragma: no cover
-                    print(f"[WARN] Nie udalo sie usunac dolnego zlecenia {lowest_buy['id']}: {exc}")
+                    logger.warning(f"Nie udalo sie usunac dolnego zlecenia {lowest_buy['id']}: {exc}")
                     return
             else:
                 return
@@ -422,18 +433,18 @@ class GridBot:
         self.grid_ratio = self.calculator.ratio
         self._save_bot_state()
         self.save_active_orders(orders)
-        print(f"[TRAILING] Przesunieto siatke w gore do zakresu {new_lower}-{new_upper}")
+        logger.info(f"[TRAILING] Przesunieto siatke w gore do zakresu {new_lower}-{new_upper}")
 
     def panic_sell(self, current_price: float) -> None:
         """Execute stop-loss: cancel orders, liquidate base, mark bot stopped."""
-        print("[ALARM] Cena przebila dolny zakres! Wykonano Panic Sell. Kapital zabezpieczony w USDT.")
+        logger.warning("[ALARM] Cena przebila dolny zakres! Wykonano Panic Sell. Kapital zabezpieczony w USDT.")
         active_orders = self.load_active_orders()
         if not self.dry_run:
             for order in active_orders:
                 try:
                     self.exchange.cancel_order(order["id"], self.symbol)
                 except Exception as exc:  # pragma: no cover
-                    print(f"[WARN] Nie udalo sie anulowac zlecenia {order['id']}: {exc}")
+                    logger.warning(f"Nie udalo sie anulowac zlecenia {order['id']}: {exc}")
         self.storage.clear_active_orders()
 
         base_currency = self.symbol.split("/")[0]
@@ -443,13 +454,13 @@ class GridBot:
                 base_free = float(balance.get(base_currency, {}).get("free", 0) or 0)
             except Exception as exc:  # pragma: no cover
                 base_free = 0.0
-                print(f"[WARN] Nie udalo sie pobrac balansu do panic sell: {exc}")
+                logger.warning(f"Nie udalo sie pobrac balansu do panic sell: {exc}")
             if base_free > 0:
                 try:
                     self.exchange.create_order(self.symbol, "market", "sell", base_free)
-                    print(f"[LIVE] Sprzedano {base_free} {base_currency} po cenie rynkowej")
+                    logger.info(f"[LIVE] Sprzedano {base_free} {base_currency} po cenie rynkowej")
                 except Exception as exc:  # pragma: no cover
-                    print(f"[WARN] Nie udalo sie zrealizowac panic sell: {exc}")
+                    logger.warning(f"Nie udalo sie zrealizowac panic sell: {exc}")
 
         self.status = "STOPPED"
         self._save_bot_state()
@@ -473,7 +484,7 @@ class GridBot:
                     updated_orders.remove(order)
                     modified = True
                 except Exception as exc:  # pragma: no cover
-                    print(f"[WARN] Nie udalo sie usunac anulowanego zlecenia {order['id']}: {exc}")
+                    logger.warning(f"Nie udalo sie usunac anulowanego zlecenia {order['id']}: {exc}")
                 continue
             if status != "closed":
                 continue
@@ -510,7 +521,7 @@ class GridBot:
                     updated_orders.append(new_order)
                 modified = True
             except Exception as exc:  # pragma: no cover
-                print(f"[WARN] Blad podczas aktualizacji bazy dla zlecenia {order['id']}: {exc}")
+                logger.warning(f"Blad podczas aktualizacji bazy dla zlecenia {order['id']}: {exc}")
 
         if modified:
             self.save_active_orders(updated_orders)
@@ -522,13 +533,13 @@ class GridBot:
         if self.offline:
             price = self._next_offline_price()
             if price is None and self.offline_once:
-                print("[INFO] Offline feed finished; stopping bot.")
+                logger.info("Offline feed finished; stopping bot.")
             return price
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
             return ticker.get("last") or ticker.get("close")
         except Exception as exc:  # pragma: no cover
-            print(f"Blad podczas pobierania tickera: {exc}")
+            logger.error(f"Blad podczas pobierania tickera: {exc}")
             return None
 
     def risk_check(self, current_price: Optional[float]) -> None:
@@ -538,42 +549,40 @@ class GridBot:
 
         if self.grid_ratio:
             profit_percent = (self.grid_ratio - 1)
-            print(f"[INFO] Siatka (geometric): krok ~{profit_percent*100:.4f}%")
+            logger.info(f"[INFO] Siatka (geometric): krok ~{profit_percent*100:.4f}%")
         else:
             grid_range = float(self.upper_price) - float(self.lower_price)
             profit_percent = (grid_range / self.grid_levels) / current_price
-            print(f"[INFO] Siatka: skok co {grid_range / self.grid_levels:.2f} (~{profit_percent*100:.4f}%)")
+            logger.info(f"[INFO] Siatka: skok co {grid_range / self.grid_levels:.2f} (~{profit_percent*100:.4f}%)")
         if profit_percent < 0.002:
-            print("\n" + "!" * 50)
-            print(
-                f"CRITICAL WARNING: zysk na kratce to tylko {profit_percent*100:.4f}%!"
-            )
-            print("Gielda pobiera ok. 0.1% - 0.2% prowizji (entry + exit).")
-            print("Sugerowane: zmniejsz liczbe grid_levels lub zwieksz zakres.")
-            print("!" * 50 + "\n")
+            logger.warning("!" * 50)
+            logger.warning(f"CRITICAL WARNING: zysk na kratce to tylko {profit_percent*100:.4f}%!")
+            logger.warning("Gielda pobiera ok. 0.1% - 0.2% prowizji (entry + exit).")
+            logger.warning("Sugerowane: zmniejsz liczbe grid_levels lub zwieksz zakres.")
+            logger.warning("!" * 50)
             time.sleep(5)
 
     def run(self, interval: float = 10.0, max_steps: Optional[int] = None) -> None:
         """Start the bot loop: load state, fetch price, and monitor the grid."""
         if self.dry_run:
-            print("Dry-run mode: skipping balance check.")
+            logger.info("Dry-run mode: skipping balance check.")
         else:
             try:
                 balance = self.exchange.fetch_balance()
-                print("Balance fetched, exchange keys look valid.")
+                logger.info("Balance fetched, exchange keys look valid.")
             except Exception as exc:  # pragma: no cover
-                print(f"Unable to fetch balance: {exc}")
+                logger.error(f"Unable to fetch balance: {exc}")
 
         initial_price = self.fetch_current_price()
         self.risk_check(initial_price)
 
         active_orders = self.load_active_orders()
         if active_orders:
-            print(f"Zaladowano {len(active_orders)} aktywnych zlecen z bazy.")
+            logger.info(f"Zaladowano {len(active_orders)} aktywnych zlecen z bazy.")
         elif initial_price is not None:
             active_orders = self.place_initial_grid(initial_price)
         else:
-            print("Nie udalo sie zainicjowac siatki - brak ceny startowej.")
+            logger.error("Nie udalo sie zainicjowac siatki - brak ceny startowej.")
             return
 
         steps = 0
@@ -585,14 +594,14 @@ class GridBot:
                     break
                 self.check_trailing(price)
                 active_orders = self.monitor_grid(price)
-                print(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
+                logger.info(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
             else:
                 if self.offline and self.offline_once and self._offline_feed_exhausted:
-                    print("[INFO] Offline feed consumed; exiting.")
+                    logger.info("Offline feed consumed; exiting.")
                     break
             steps += 1
             if max_steps is not None and steps >= max_steps:
-                print(f"[INFO] Reached max steps ({max_steps}); exiting.")
+                logger.info(f"Reached max steps ({max_steps}); exiting.")
                 break
             time.sleep(interval)
 

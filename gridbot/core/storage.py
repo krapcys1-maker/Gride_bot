@@ -1,7 +1,11 @@
+import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+
+logger = logging.getLogger(__name__)
 
 
 class Storage:
@@ -166,7 +170,7 @@ class Storage:
                     float(trade_data["fee_estimated"]),
                 ),
             )
-        print(
+        logger.info(
             f"[ACCOUNTING] zapisano transakcje: {trade_data['side']} {trade_data['amount']} "
             f"{trade_data['symbol']} po {trade_data['price']}"
         )

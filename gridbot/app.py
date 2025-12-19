@@ -1,6 +1,20 @@
 import argparse
+import logging
+from typing import Optional, Sequence
 
 from gridbot.core.bot import GridBot
+
+
+def configure_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
+    lvl = getattr(logging, level.upper(), logging.INFO)
+    handlers = [logging.StreamHandler()]
+    if log_file:
+        handlers.append(logging.FileHandler(log_file))
+    logging.basicConfig(
+        level=lvl,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=handlers,
+    )
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -52,11 +66,22 @@ def parse_args(argv=None) -> argparse.Namespace:
         type=int,
         help="Seed for deterministic offline scenarios",
     )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARN, ERROR)",
+    )
+    parser.add_argument(
+        "--log-file",
+        help="Optional log file path (in addition to console)",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> None:
     args = parse_args(argv)
+    configure_logging(args.log_level, args.log_file)
+    logger = logging.getLogger(__name__)
     offline_mode = args.offline or bool(args.offline_scenario)
     forced_dry_run = args.dry_run or offline_mode
     bot = (
@@ -84,7 +109,7 @@ def main(argv=None) -> None:
             bot.reset_state()
         bot.run(interval=args.interval, max_steps=args.max_steps)
     except KeyboardInterrupt:
-        print("[INFO] Shutdown requested")
+        logger.info("Shutdown requested")
         try:
             bot.mark_stopped()
         except Exception:
