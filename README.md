@@ -35,3 +35,9 @@ Minimal grid trading scaffold written in Python. Phase 1 focuses on configuratio
 - `pytest -q`
 - Batch run example: `python -m gridbot.tools.batch_run --out-dir out_runs --strategy-ids classic_grid --scenarios range --seeds 1,2 --steps 50 --interval 0`
 - Repo wymusza LF w plikach tekstowych (patrz .gitattributes); na Windows git auto-konwertuje wg ustawienia core.autocrlf.
+
+## Branching
+
+- `dev`: prace bieżące, gałąź do której trafiają zmiany przed stabilizacją.
+- `main`: stabilne wydania.
+- PR flow: twórz/aktualizuj zmiany na `dev`, otwieraj PR z `dev` do `main`, po review merguj do `main`.
