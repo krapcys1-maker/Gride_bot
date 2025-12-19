@@ -31,5 +31,16 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
     data["trailing_up"] = bool(data.get("trailing_up", False))
     data["stop_loss_enabled"] = bool(data.get("stop_loss_enabled", True))
     data["grid_type"] = str(data.get("grid_type", "arithmetic")).lower()
+    data["offline"] = bool(data.get("offline", False))
+    offline_prices = data.get("offline_prices", [])
+    if isinstance(offline_prices, list):
+        parsed_prices = []
+        for price in offline_prices:
+            try:
+                parsed_prices.append(float(price))
+            except (TypeError, ValueError):
+                continue
+        data["offline_prices"] = parsed_prices
+    else:
+        data["offline_prices"] = []
     return data
-

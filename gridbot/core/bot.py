@@ -1,4 +1,6 @@
+import os
 import time
+from itertools import cycle
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,6 +25,13 @@ class GridBot:
     ) -> None:
         self.dry_run = dry_run
         self.config = load_config(config_path)
+        self.offline = bool(
+            self.dry_run
+            and (
+                str(os.getenv("GRIDBOT_OFFLINE", "")).lower() in {"1", "true", "yes"}
+                or bool(self.config.get("offline"))
+            )
+        )
         self.symbol = str(self.config["symbol"])
         self.order_size = float(self.config["order_size"])
         self.grid_levels = int(self.config["grid_levels"])
@@ -33,7 +42,11 @@ class GridBot:
         self.stop_loss_enabled = bool(self.config["stop_loss_enabled"])
         self.status = "RUNNING"
 
-        self.exchange = init_exchange()
+        self._offline_price_cycle = None
+        if self.offline:
+            self._prepare_offline_feed()
+
+        self.exchange = init_exchange(offline=self.offline, price_provider=self._next_offline_price if self.offline else None)
 
         self.storage = Storage(db_path)
         self._init_db()
@@ -62,6 +75,53 @@ class GridBot:
 
     def _save_bot_state(self) -> None:
         self.storage.save_bot_state(self.lower_price, self.upper_price, self.status)
+
+    def _load_offline_prices(self) -> List[float]:
+        feed: List[float] = []
+        config_prices = self.config.get("offline_prices")
+        if isinstance(config_prices, list):
+            for price in config_prices:
+                try:
+                    feed.append(float(price))
+                except (TypeError, ValueError):
+                    continue
+        if feed:
+            return feed
+
+        csv_path = Path("data/offline_prices.csv")
+        if csv_path.exists():
+            import csv
+
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.reader(handle)
+                for row in reader:
+                    if not row:
+                        continue
+                    candidates = [row[0]]
+                    if len(row) > 1:
+                        candidates.append(row[1])
+                    parsed = None
+                    for candidate in candidates:
+                        try:
+                            parsed = float(candidate)
+                            break
+                        except (TypeError, ValueError):
+                            continue
+                    if parsed is not None:
+                        feed.append(parsed)
+        return feed
+
+    def _prepare_offline_feed(self) -> None:
+        prices = self._load_offline_prices()
+        self._offline_price_cycle = cycle(prices) if prices else None
+
+    def _next_offline_price(self) -> Optional[float]:
+        if not self._offline_price_cycle:
+            return None
+        try:
+            return next(self._offline_price_cycle)
+        except StopIteration:
+            return None
 
     def load_active_orders(self) -> List[Dict[str, Any]]:
         exchange_id = getattr(self.exchange, "id", "exchange")
@@ -356,6 +416,8 @@ class GridBot:
 
     def fetch_current_price(self) -> Optional[float]:
         """Fetch latest price for configured symbol."""
+        if self.offline:
+            return self._next_offline_price()
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
             return ticker.get("last") or ticker.get("close")

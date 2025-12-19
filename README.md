@@ -13,3 +13,9 @@ Minimal grid trading scaffold written in Python. Phase 1 focuses on configurati
 - Flat project layout: config, script, and docs in repo root.
 - Configuration in `config.yaml`.
 - Simple connection code in `grid_bot.py` that validates settings and establishes an exchange client via ccxt.
+
+## Offline / Test Mode
+
+- Set environment variable `GRIDBOT_OFFLINE=1` and ensure `DRY_RUN=true` (e.g., in `config.yaml`).
+- Enable `offline: true` and provide a feed via `offline_prices: [100.0, 101.5, 102.0]` or create `data/offline_prices.csv` with one price per line.
+- Run with `python main.py` to start without KuCoin API keys.
