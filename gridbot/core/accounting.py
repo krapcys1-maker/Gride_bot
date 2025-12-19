@@ -12,10 +12,12 @@ class AccountingConfig:
     initial_usdt: float = 1000.0
     initial_base: float = 0.0
     fee_rate: float = 0.001
+    fee_bps: float = 0.0
     slippage_bps: float = 0.0
     spread_bps: float = 0.0
     maker_fee_bps: float = 0.0
     taker_fee_bps: float = 0.0
+    apply_costs_in_price: bool = True
 
 
 class Accounting:
@@ -35,16 +37,26 @@ class Accounting:
             return self.quote_qty
         return self.quote_qty + self.base_qty * price
 
-    def apply_fee(self, value: float) -> float:
-        fee_rate = self.config.maker_fee_bps / 10000
+    def apply_fee(self, value: float, fee_rate: Optional[float] = None) -> float:
+        if fee_rate is None:
+            if self.config.fee_bps:
+                fee_rate = self.config.fee_bps / 10000
+            elif self.config.fee_rate:
+                fee_rate = self.config.fee_rate
+            elif self.config.taker_fee_bps:
+                fee_rate = self.config.taker_fee_bps / 10000
+            elif self.config.maker_fee_bps:
+                fee_rate = self.config.maker_fee_bps / 10000
+            else:
+                fee_rate = 0.0
         return value * fee_rate
 
-    def on_fill(self, side: str, price: float, qty: float) -> Tuple[bool, float, float]:
+    def on_fill(self, side: str, price: float, qty: float, fee_rate: Optional[float] = None) -> Tuple[bool, float, float]:
         side_l = side.lower()
         if side_l not in {"buy", "sell"}:
             return False, 0.0, self.equity(price)
         value = qty * price
-        fee = self.apply_fee(value)
+        fee = self.apply_fee(value, fee_rate)
 
         if side_l == "buy":
             total_cost = value + fee

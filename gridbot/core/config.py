@@ -54,10 +54,12 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
         "initial_usdt": float(acct_cfg.get("initial_usdt", 1000.0)),
         "initial_base": float(acct_cfg.get("initial_base", 0.0)),
         "fee_rate": float(acct_cfg.get("fee_rate", 0.001)),
+        "fee_bps": float(acct_cfg.get("fee_bps", 0.0)),
         "slippage_bps": float(acct_cfg.get("slippage_bps", 0.0)),
         "spread_bps": float(acct_cfg.get("spread_bps", 0.0)),
         "maker_fee_bps": float(acct_cfg.get("maker_fee_bps", 0.0)),
         "taker_fee_bps": float(acct_cfg.get("taker_fee_bps", 0.0)),
+        "apply_costs_in_price": bool(acct_cfg.get("apply_costs_in_price", True)),
     }
     data["strategy_id"] = str(data.get("strategy_id", "classic_grid"))
     data["offline"] = bool(data.get("offline", False))

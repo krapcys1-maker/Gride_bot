@@ -1,0 +1,24 @@
+symbol: "BTC/USDT"
+lower_price: 86000
+upper_price: 90000
+grid_levels: 10
+order_size: 0.001
+trailing_up: false
+stop_loss_enabled: true
+grid_type: geometric
+dry_run: true
+strategy_id: classic_grid
+risk:
+  enabled: true
+  max_consecutive_errors: 3
+  max_price_jump_pct: 2.0
+  pause_seconds: 1
+  max_drawdown_pct: 10.0
+  panic_on_stop: true
+accounting:
+  enabled: true
+  initial_usdt: 1000.0
+  initial_base: 0.0
+  fee_bps: 10
+  spread_bps: 20
+  slippage_bps: 30
