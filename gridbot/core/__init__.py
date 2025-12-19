@@ -3,4 +3,3 @@
 from .bot import GridBot
 
 __all__ = ["GridBot"]
-

@@ -52,6 +52,7 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
         "fee_rate": float(acct_cfg.get("fee_rate", 0.001)),
         "slippage_bps": float(acct_cfg.get("slippage_bps", 0.0)),
     }
+    data["strategy_id"] = str(data.get("strategy_id", "classic_grid"))
     data["offline"] = bool(data.get("offline", False))
     offline_prices = data.get("offline_prices", [])
     if isinstance(offline_prices, list):

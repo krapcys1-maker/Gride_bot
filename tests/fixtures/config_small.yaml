@@ -7,6 +7,7 @@ trailing_up: false
 stop_loss_enabled: true
 grid_type: geometric
 dry_run: true
+strategy_id: classic_grid
 risk:
   enabled: true
   max_consecutive_errors: 3
@@ -14,3 +15,9 @@ risk:
   pause_seconds: 1
   max_drawdown_pct: 10.0
   panic_on_stop: true
+accounting:
+  enabled: true
+  initial_usdt: 1000.0
+  initial_base: 0.0
+  fee_rate: 0.001
+  slippage_bps: 0.0

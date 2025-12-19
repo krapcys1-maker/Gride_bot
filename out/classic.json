@@ -1,0 +1,21 @@
+{
+  "config_path": "config.yaml",
+  "config_hash": "675f0a9d244595bb3ca6658e1c97c285d8459567",
+  "offline": true,
+  "scenario": "range",
+  "seed": 7,
+  "status": "RUNNING",
+  "reason": "",
+  "steps": 50,
+  "start": "2025-12-19T11:11:29.464425",
+  "end": "2025-12-19T11:11:29.870671",
+  "metrics": {
+    "price": 87670.39371705223,
+    "equity": 1000.0,
+    "pnl": 0.0,
+    "peak_equity": 1000.0,
+    "drawdown_pct": 0.0,
+    "trades": 0,
+    "total_fees": 0.0
+  }
+}

@@ -16,6 +16,7 @@ from grid_logic import GridCalculator
 from .config import CONFIG_FILE, DB_FILE, DRY_RUN, load_config
 from .accounting import Accounting, AccountingConfig
 from .exchange import init_exchange
+from gridbot.strategies import get_strategy
 from .risk import RiskConfig, RiskEngine
 from .storage import Storage
 
@@ -83,6 +84,9 @@ class GridBot:
         self.trade_count = 0
         self.total_fees = 0.0
         self.initial_equity: Optional[float] = None
+        self.strategy_id = self.config.get("strategy_id", "classic_grid")
+        StrategyCls = get_strategy(self.strategy_id)
+        self.strategy = StrategyCls(self)
 
         risk_cfg = self.config.get("risk", {})
         self.risk_engine = RiskEngine(
@@ -671,6 +675,7 @@ class GridBot:
             return
 
         self._save_bot_state()
+        self.strategy.on_start(active_orders)
         self.last_price = initial_price
         steps = 0
         while True:
@@ -731,11 +736,7 @@ class GridBot:
 
             if price is not None:
                 try:
-                    if self.stop_loss_enabled and price < self.lower_price:
-                        self.panic_sell(price)
-                        break
-                    self.check_trailing(price)
-                    active_orders = self.monitor_grid(price)
+                    active_orders = self.strategy.on_tick(price, active_orders)
                     now_ts = time.time()
                     if self.status_every_seconds <= 0:
                         logger.debug(f"Bot dziala. Para: {self.symbol}, Cena: {price}")

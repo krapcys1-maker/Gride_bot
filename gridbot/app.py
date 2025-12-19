@@ -125,8 +125,13 @@ def main(argv=None) -> None:
         report = bot.run(interval=args.interval, max_steps=args.max_steps)
         if args.report_json and report:
             import json
-
-            Path(args.report_json).write_text(json.dumps(report, indent=2))
+            try:
+                report_path = Path(args.report_json)
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(json.dumps(report, indent=2))
+            except Exception as exc:  # pragma: no cover
+                logger.error(f"Nie udalo sie zapisac raportu JSON ({args.report_json}): {exc}")
+                raise SystemExit(2)
     except KeyboardInterrupt:
         logger.info("Shutdown requested")
         try:

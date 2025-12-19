@@ -43,3 +43,31 @@ def test_report_json_created(tmp_path):
     metrics = data["metrics"]
     for key in ["trades", "total_fees", "equity", "pnl"]:
         assert key in metrics
+
+
+def test_report_json_creates_parent_dirs(tmp_path):
+    subdir_report = tmp_path / "subdir" / "report.json"
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(FIXTURE_CONFIG.read_text())
+    db_path = tmp_path / "bot.db"
+    args = [
+        "--config",
+        str(cfg_path),
+        "--db-path",
+        str(db_path),
+        "--dry-run",
+        "--offline",
+        "--offline-scenario",
+        "range",
+        "--seed",
+        "6",
+        "--max-steps",
+        "10",
+        "--interval",
+        "0",
+        "--reset-state",
+        "--report-json",
+        str(subdir_report),
+    ]
+    main(args)
+    assert subdir_report.exists()
