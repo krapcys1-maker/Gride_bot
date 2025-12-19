@@ -1,10 +1,12 @@
+import math
 import os
+import random
 import time
 from itertools import cycle
 from uuid import uuid4
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import ccxt
 
@@ -23,16 +25,22 @@ class GridBot:
         config_path: Path = CONFIG_FILE,
         db_path: Path = DB_FILE,
         dry_run: bool = DRY_RUN,
+        offline: Optional[bool] = None,
+        offline_scenario: Optional[str] = None,
+        offline_once: bool = False,
     ) -> None:
         self.dry_run = dry_run
         self.config = load_config(config_path)
-        self.offline = bool(
-            self.dry_run
-            and (
-                str(os.getenv("GRIDBOT_OFFLINE", "")).lower() in {"1", "true", "yes"}
-                or bool(self.config.get("offline"))
-            )
+        offline_requested = (
+            bool(offline)
+            or str(os.getenv("GRIDBOT_OFFLINE", "")).lower() in {"1", "true", "yes"}
+            or bool(self.config.get("offline"))
         )
+        self.offline = offline_requested
+        self.offline_once = offline_once
+        self.offline_scenario = offline_scenario
+        if self.offline:
+            self.dry_run = True
         self.symbol = str(self.config["symbol"])
         self.order_size = float(self.config["order_size"])
         self.grid_levels = int(self.config["grid_levels"])
@@ -43,7 +51,8 @@ class GridBot:
         self.stop_loss_enabled = bool(self.config["stop_loss_enabled"])
         self.status = "RUNNING"
 
-        self._offline_price_cycle = None
+        self._offline_price_cycle: Optional[Iterable[float]] = None
+        self._offline_feed_exhausted = False
         if self.offline:
             self._prepare_offline_feed()
 
@@ -113,6 +122,8 @@ class GridBot:
                 for row in reader:
                     if not row:
                         continue
+                    if len(row) == 1 and row[0].lower() == "price":
+                        continue
                     candidates = [row[0]]
                     if len(row) > 1:
                         candidates.append(row[1])
@@ -127,16 +138,75 @@ class GridBot:
                         feed.append(parsed)
         return feed
 
+    def _generate_offline_scenario(self, scenario: str, length: int = 500) -> List[float]:
+        base = 88000.0
+        prices: List[float] = []
+        if scenario == "trend_up":
+            for i in range(length):
+                drift = i * 3
+                noise = random.uniform(-50, 50)
+                prices.append(base - 400 + drift + noise)
+        elif scenario == "trend_down":
+            for i in range(length):
+                drift = i * -3
+                noise = random.uniform(-50, 50)
+                prices.append(base + 400 + drift + noise)
+        elif scenario == "flash_crash":
+            stable_len = max(50, length // 5)
+            crash_len = max(20, length // 10)
+            recover_len = length - stable_len - crash_len
+            for i in range(stable_len):
+                noise = random.uniform(-40, 40)
+                prices.append(base + noise)
+            crash_drop = random.uniform(0.15, 0.25)
+            crash_price = base * (1 - crash_drop)
+            for i in range(crash_len):
+                noise = random.uniform(-30, 30)
+                prices.append(crash_price + noise)
+            for i in range(recover_len):
+                frac = (i + 1) / recover_len
+                target = crash_price + (base - crash_price) * 0.6
+                noise = random.uniform(-50, 50)
+                prices.append(crash_price + (target - crash_price) * frac + noise)
+        else:  # range / default
+            for i in range(length):
+                wave = math.sin(i / 12) * 300
+                noise = random.uniform(-80, 80)
+                prices.append(base + wave + noise)
+        return prices
+
     def _prepare_offline_feed(self) -> None:
-        prices = self._load_offline_prices()
-        self._offline_price_cycle = cycle(prices) if prices else None
+        prices: List[float] = []
+        if self.offline_scenario:
+            prices = self._generate_offline_scenario(self.offline_scenario)
+        if not prices:
+            prices = self._load_offline_prices()
+        self._offline_feed_warned = False
+        if prices:
+            if self.offline_once:
+                self._offline_price_cycle = iter(prices)
+                self._offline_feed_loop = False
+            else:
+                self._offline_price_cycle = cycle(prices)
+                self._offline_feed_loop = True
+        else:
+            self._offline_price_cycle = None
+            self._offline_feed_loop = False
 
     def _next_offline_price(self) -> Optional[float]:
         if not self._offline_price_cycle:
+            if not getattr(self, "_offline_feed_warned", False):
+                print("[WARN] Offline mode: no price feed available (offline_prices or data/offline_prices.csv).")
+                self._offline_feed_warned = True
+            self._offline_feed_exhausted = True
             return None
         try:
             return next(self._offline_price_cycle)
         except StopIteration:
+            self._offline_feed_exhausted = True
+            if not getattr(self, "_offline_feed_warned", False):
+                print("[WARN] Offline mode: price feed exhausted.")
+                self._offline_feed_warned = True
             return None
 
     def mark_stopped(self) -> None:
@@ -439,7 +509,10 @@ class GridBot:
     def fetch_current_price(self) -> Optional[float]:
         """Fetch latest price for configured symbol."""
         if self.offline:
-            return self._next_offline_price()
+            price = self._next_offline_price()
+            if price is None and self.offline_once:
+                print("[INFO] Offline feed finished; stopping bot.")
+            return price
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
             return ticker.get("last") or ticker.get("close")
@@ -471,11 +544,14 @@ class GridBot:
 
     def run(self, interval: float = 10.0) -> None:
         """Start the bot loop: load state, fetch price, and monitor the grid."""
-        try:
-            balance = self.exchange.fetch_balance()
-            print("Balance fetched, exchange keys look valid.")
-        except Exception as exc:  # pragma: no cover
-            print(f"Unable to fetch balance: {exc}")
+        if self.dry_run:
+            print("Dry-run mode: skipping balance check.")
+        else:
+            try:
+                balance = self.exchange.fetch_balance()
+                print("Balance fetched, exchange keys look valid.")
+            except Exception as exc:  # pragma: no cover
+                print(f"Unable to fetch balance: {exc}")
 
         initial_price = self.fetch_current_price()
         self.risk_check(initial_price)
@@ -498,6 +574,10 @@ class GridBot:
                 self.check_trailing(price)
                 active_orders = self.monitor_grid(price)
                 print(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
+            else:
+                if self.offline and self.offline_once and self._offline_feed_exhausted:
+                    print("[INFO] Offline feed consumed; exiting.")
+                    break
             time.sleep(interval)
 
     def close(self) -> None:

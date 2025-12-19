@@ -1,6 +1,6 @@
 # SimpleGrid V1
 
-Minimal grid trading scaffold written in Python. Phase 1 focuses on configuration management and establishing a ccxt connection that can target testnets or sandboxes.
+Minimal grid trading scaffold written in Python. Phase 1 focuses on configuration management and establishing a ccxt connection that can target testnets or sandboxes.
 
 ## Getting Started
 
@@ -19,9 +19,14 @@ Minimal grid trading scaffold written in Python. Phase 1 focuses on configurati
 - Set environment variable `GRIDBOT_OFFLINE=1` and ensure `DRY_RUN=true` (e.g., in `config.yaml`).
 - Enable `offline: true` and provide a feed via `offline_prices: [100.0, 101.5, 102.0]` or create `data/offline_prices.csv` with one price per line.
 - Run with `python main.py` to start without KuCoin API keys.
+- CSV feed format: create `data/offline_prices.csv` with one column `price` (header optional), one value per line (e.g., `100.0`).
+- Repo zawiera przykładowy `data/offline_prices.csv` (zakres ok. 87500–88500).
+- Flagą `--offline-scenario {range,trend_up,trend_down,flash_crash}` wygenerujesz syntetyczny feed, gdy brak CSV/config; `--offline-once` zakończy bota po zużyciu feedu.
 
 ## CLI Examples
 
 - `python main.py`
 - `python main.py --dry-run --reset-state`
 - `python main.py --dry-run --reset-state --interval 1`
+- `python main.py --dry-run --offline --reset-state --interval 1`
+- `python main.py --dry-run --offline --offline-scenario trend_up --offline-once`
