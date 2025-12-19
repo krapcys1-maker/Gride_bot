@@ -42,4 +42,4 @@ def test_completed_status_and_steps(tmp_path):
 def test_stopped_status_for_flash_crash(tmp_path):
     report = run_and_load(tmp_path, scenario="flash_crash", steps=200)
     assert report["status"] == "STOPPED"
-    assert report.get("reason")
+    assert report.get("reason") == "panic_sell"

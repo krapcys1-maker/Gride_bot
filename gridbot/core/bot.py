@@ -535,7 +535,7 @@ class GridBot:
                     logger.warning(f"Nie udalo sie zrealizowac panic sell: {exc}")
 
         self.status = "STOPPED"
-        self.stop_reason = "stop_loss"
+        self.stop_reason = "panic_sell"
         self._save_bot_state()
 
     def monitor_grid(
