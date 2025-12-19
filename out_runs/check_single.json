@@ -1,0 +1,26 @@
+{
+  "config_path": "tests\\fixtures\\config_batch.yaml",
+  "config_hash": "d5e4ab8e758878f1a5eb6c56ca5e65fc1874de7c",
+  "offline": true,
+  "scenario": "range",
+  "seed": 1,
+  "status": "COMPLETED",
+  "reason": "max_steps",
+  "steps": 10,
+  "steps_completed": 10,
+  "start": "2025-12-19T11:52:53.923932",
+  "end": "2025-12-19T11:52:54.000433",
+  "metrics": {
+    "price": 88227.31607183948,
+    "equity": 1002.8957016094851,
+    "pnl": 1.629161418854551,
+    "peak_equity": 1003.1719201937401,
+    "drawdown_pct": 0.02753452112193317,
+    "trades": 0,
+    "total_fees": 0.0
+  },
+  "accounting_skips": {
+    "skipped_sell_no_base": 0,
+    "skipped_buy_no_quote": 0
+  }
+}

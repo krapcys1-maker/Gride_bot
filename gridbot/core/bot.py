@@ -238,9 +238,14 @@ class GridBot:
                 noise = random.uniform(-50, 50)
                 prices.append(crash_price + (target - crash_price) * frac + noise)
         else:  # range / default
+            amplitude_pct = float(self.config.get("risk", {}).get("amplitude_pct", 1.0))
+            noise_pct = float(self.config.get("risk", {}).get("noise_pct", 0.5))
+            period_steps = int(self.config.get("risk", {}).get("period_steps", 24))
+            amplitude = base * (amplitude_pct / 100.0)
+            noise_scale = base * (noise_pct / 100.0)
             for i in range(length):
-                wave = math.sin(i / 12) * 300
-                noise = random.uniform(-80, 80)
+                wave = math.sin(i / max(period_steps, 1)) * amplitude
+                noise = random.uniform(-noise_scale, noise_scale)
                 prices.append(base + wave + noise)
         return prices
 

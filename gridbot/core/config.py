@@ -39,6 +39,9 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
         "pause_seconds": float(risk_cfg.get("pause_seconds", 60)),
         "max_drawdown_pct": float(risk_cfg.get("max_drawdown_pct", 10.0)),
         "panic_on_stop": bool(risk_cfg.get("panic_on_stop", True)),
+        "amplitude_pct": float(risk_cfg.get("amplitude_pct", 1.0)),
+        "noise_pct": float(risk_cfg.get("noise_pct", 0.5)),
+        "period_steps": int(risk_cfg.get("period_steps", 24)),
     }
     if data["risk"]["max_consecutive_errors"] < 1:
         data["risk"]["max_consecutive_errors"] = 1

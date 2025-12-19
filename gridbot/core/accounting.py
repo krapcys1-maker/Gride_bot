@@ -25,6 +25,7 @@ class Accounting:
         self.peak_equity = self.equity(None)
         self.skipped_sell_no_base = 0
         self.skipped_buy_no_quote = 0
+        self.trades_executed = 0
 
     def equity(self, price: Optional[float]) -> float:
         if price is None:
@@ -66,4 +67,5 @@ class Accounting:
         eq = self.equity(price)
         if eq > self.peak_equity:
             self.peak_equity = eq
+        self.trades_executed += 1
         return True, fee, eq

@@ -3,28 +3,24 @@
   "config_hash": "d5e4ab8e758878f1a5eb6c56ca5e65fc1874de7c",
   "offline": true,
   "scenario": "flash_crash",
-  "seed": 2,
+  "seed": 1,
   "status": "STOPPED",
   "reason": "stop_loss",
   "steps": 99,
   "steps_completed": 99,
-  "start": "2025-12-19T11:53:46.268799",
-  "end": "2025-12-19T11:53:46.846134",
+  "start": "2025-12-19T11:53:31.551159",
+  "end": "2025-12-19T11:53:32.233192",
   "metrics": {
-    "price": 74511.25839756284,
-    "equity": 911.1601842021882,
-    "pnl": -90.64776742579329,
-    "peak_equity": 1001.8079516279815,
-    "drawdown_pct": 9.04841764117431,
+    "price": 74328.31559112809,
+    "equity": 909.9344673990754,
+    "pnl": -91.49880269623986,
+    "peak_equity": 1001.7987562074436,
+    "drawdown_pct": 9.169934404405046,
     "trades": 1,
     "total_fees": 0.0879772697916911
   },
   "accounting_skips": {
     "skipped_sell_no_base": 0,
     "skipped_buy_no_quote": 0
-  },
-  "run_id": "classic_grid_flash_crash_seed2",
-  "strategy_id": "classic_grid",
-  "error_type": "",
-  "error_message": ""
+  }
 }

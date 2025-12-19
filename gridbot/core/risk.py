@@ -11,6 +11,9 @@ class RiskConfig:
     pause_seconds: float = 60.0
     max_drawdown_pct: float = 10.0
     panic_on_stop: bool = True
+    amplitude_pct: float = 1.0
+    noise_pct: float = 0.5
+    period_steps: int = 24
 
 
 class RiskEngine:
