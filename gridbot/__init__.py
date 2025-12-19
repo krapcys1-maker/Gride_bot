@@ -1,0 +1,2 @@
+"""Grid trading bot package."""
+
