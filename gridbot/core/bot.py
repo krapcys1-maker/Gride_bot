@@ -17,7 +17,7 @@ from .config import CONFIG_FILE, DB_FILE, DRY_RUN, load_config
 from .accounting import Accounting, AccountingConfig
 from .costs import grid_step_pct, recommend_grid_levels, roundtrip_cost_bps, roundtrip_cost_pct
 from .exchange import init_exchange
-from .execution import ExecutionModel
+from .execution_model import ExecutionModel, Candle
 from gridbot.strategies import get_strategy
 from .risk import RiskConfig, RiskEngine
 from .storage import Storage
@@ -114,7 +114,7 @@ class GridBot:
             )
         )
 
-        self._offline_price_cycle: Optional[Iterable[float]] = None
+        self._offline_price_cycle: Optional[Iterable[Candle]] = None
         self._offline_feed_exhausted = False
         if self.offline:
             self._prepare_offline_feed()
@@ -156,7 +156,6 @@ class GridBot:
                 )
             )
             self.execution_model = ExecutionModel(
-                fee_bps=fee_bps,
                 spread_bps=spread_bps,
                 slippage_bps=slippage_bps,
                 apply_costs_in_price=self.costs_in_price,
@@ -339,13 +338,13 @@ class GridBot:
             self.status = "STOPPED"
             self.stop_reason = "grid_step_too_small"
 
-    def _load_offline_prices(self) -> List[float]:
-        feed: List[float] = []
+    def _load_offline_prices(self) -> List[Candle]:
+        feed: List[Candle] = []
         config_prices = self.config.get("offline_prices")
         if isinstance(config_prices, list):
             for price in config_prices:
                 try:
-                    feed.append(float(price))
+                    feed.append(Candle.from_price(float(price)))
                 except (TypeError, ValueError):
                     continue
         if feed:
@@ -373,39 +372,41 @@ class GridBot:
                         except (TypeError, ValueError):
                             continue
                     if parsed is not None:
-                        feed.append(parsed)
+                        feed.append(Candle.from_price(parsed))
         return feed
 
-    def _generate_offline_scenario(self, scenario: str, length: int = 500) -> List[float]:
+    def _generate_offline_scenario(self, scenario: str, length: int = 500) -> List[Candle]:
         base = 88000.0
-        prices: List[float] = []
+        prices: List[Candle] = []
         if scenario == "trend_up":
             for i in range(length):
                 drift = i * 3
                 noise = random.uniform(-50, 50)
-                prices.append(base - 400 + drift + noise)
+                p = base - 400 + drift + noise
+                prices.append(Candle.from_price(p))
         elif scenario == "trend_down":
             for i in range(length):
                 drift = i * -3
                 noise = random.uniform(-50, 50)
-                prices.append(base + 400 + drift + noise)
+                p = base + 400 + drift + noise
+                prices.append(Candle.from_price(p))
         elif scenario == "flash_crash":
             stable_len = max(50, length // 5)
             crash_len = max(20, length // 10)
             recover_len = length - stable_len - crash_len
             for i in range(stable_len):
                 noise = random.uniform(-40, 40)
-                prices.append(base + noise)
+                prices.append(Candle.from_price(base + noise))
             crash_drop = random.uniform(0.15, 0.25)
             crash_price = base * (1 - crash_drop)
             for i in range(crash_len):
                 noise = random.uniform(-30, 30)
-                prices.append(crash_price + noise)
+                prices.append(Candle.from_price(crash_price + noise))
             for i in range(recover_len):
                 frac = (i + 1) / recover_len
                 target = crash_price + (base - crash_price) * 0.6
                 noise = random.uniform(-50, 50)
-                prices.append(crash_price + (target - crash_price) * frac + noise)
+                prices.append(Candle.from_price(crash_price + (target - crash_price) * frac + noise))
         else:  # range / default
             amplitude_pct = float(self.config.get("risk", {}).get("amplitude_pct", 1.0))
             noise_pct = float(self.config.get("risk", {}).get("noise_pct", 0.5))
@@ -415,11 +416,11 @@ class GridBot:
             for i in range(length):
                 wave = math.sin(i / max(period_steps, 1)) * amplitude
                 noise = random.uniform(-noise_scale, noise_scale)
-                prices.append(base + wave + noise)
+                prices.append(Candle.from_price(base + wave + noise))
         return prices
 
     def _prepare_offline_feed(self) -> None:
-        prices: List[float] = []
+        prices: List[Candle] = []
         if self.offline_scenario:
             prices = self._generate_offline_scenario(self.offline_scenario)
         if not prices:
@@ -436,7 +437,7 @@ class GridBot:
             self._offline_price_cycle = None
             self._offline_feed_loop = False
 
-    def _next_offline_price(self) -> Optional[float]:
+    def _next_offline_price(self) -> Optional[Candle]:
         if not self._offline_price_cycle:
             if not getattr(self, "_offline_feed_warned", False):
                 logger.warning("Offline mode: no price feed available (offline_prices or data/offline_prices.csv).")
@@ -568,7 +569,7 @@ class GridBot:
     def check_order_status(
         self,
         order: Dict[str, Any],
-        current_price: Optional[float],
+        current_price: Any,
     ) -> Tuple[str, Optional[float], float]:
         """
         Determine the status of an order.
@@ -581,6 +582,12 @@ class GridBot:
                 return "open", None, 0.0
 
             order_price = float(order["price"])
+            if isinstance(current_price, Candle):
+                candle = current_price
+                if self.execution_model and self.execution_model.should_fill_limit(side, order_price, candle.low, candle.high):
+                    fill_price = self.execution_model.fill_price_limit(side, order_price)
+                    return "closed", fill_price, float(order.get("amount", self.order_size))
+                return "open", None, 0.0
             filled = (side == "buy" and current_price <= order_price) or (
                 side == "sell" and current_price >= order_price
             )
@@ -749,7 +756,7 @@ class GridBot:
                 slip_cost = 0.0
                 spread_cost = 0.0
                 if self.execution_model:
-                    execution_price = self.execution_model.execution_price(order["side"], mid_price)
+                    execution_price = self.execution_model.fill_price_limit(order["side"], mid_price)
                     slip_cost, spread_cost = self.execution_model.cost_estimates(filled_amount, mid_price)
                 trade_value = round(execution_price * filled_amount, 10)
                 trade_data["price"] = execution_price
@@ -816,10 +823,12 @@ class GridBot:
     def fetch_current_price(self) -> Optional[float]:
         """Fetch latest price for configured symbol."""
         if self.offline:
-            price = self._next_offline_price()
-            if price is None and self.offline_once:
+            candle = self._next_offline_price()
+            if candle is None and self.offline_once:
                 logger.info("Offline feed finished; stopping bot.")
-            return price
+            if isinstance(candle, Candle):
+                return candle.close
+            return float(candle) if candle is not None else None
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
             return ticker.get("last") or ticker.get("close")
