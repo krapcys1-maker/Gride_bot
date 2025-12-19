@@ -45,13 +45,17 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--offline-scenario",
-        choices=["range", "trend_up", "trend_down", "flash_crash"],
+        choices=["range", "trend_up", "trend_down", "flash_crash", "from_csv_ohlc"],
         help="Generate synthetic offline price feed if CSV/config feed unavailable",
     )
     parser.add_argument(
         "--offline-once",
         action="store_true",
         help="Do not loop offline feed; exit when prices are exhausted",
+    )
+    parser.add_argument(
+        "--offline-csv",
+        help="Path to CSV with OHLC data for offline mode",
     )
     parser.add_argument(
         "--max-steps",
@@ -101,6 +105,7 @@ def main(argv=None) -> None:
             offline=offline_mode,
             offline_scenario=args.offline_scenario,
             offline_once=args.offline_once,
+            offline_csv=args.offline_csv,
             config_path=args.config,
             db_path=args.db_path,
             seed=args.seed,
@@ -112,6 +117,7 @@ def main(argv=None) -> None:
             offline=offline_mode,
             offline_scenario=args.offline_scenario,
             offline_once=args.offline_once,
+            offline_csv=args.offline_csv,
             config_path=args.config,
             db_path=args.db_path,
             seed=args.seed,

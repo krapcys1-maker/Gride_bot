@@ -37,6 +37,7 @@ class GridBot:
         offline: Optional[bool] = None,
         offline_scenario: Optional[str] = None,
         offline_once: bool = False,
+        offline_csv: Optional[str] = None,
         seed: Optional[int] = None,
         status_every_seconds: float = 10.0,
         report_path: Optional[str] = None,
@@ -63,6 +64,7 @@ class GridBot:
         self.offline_once = offline_once
         self.offline_scenario = offline_scenario
         self.seed = seed
+        self.offline_csv = Path(offline_csv) if offline_csv else None
         if self.offline:
             self.dry_run = True
         self.symbol = str(self.config["symbol"])
@@ -375,6 +377,29 @@ class GridBot:
                         feed.append(Candle.from_price(parsed))
         return feed
 
+    def _load_offline_csv(self, path: Path) -> List[Candle]:
+        import csv
+
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Offline CSV not found: {path}")
+        feed: List[Candle] = []
+        with path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            required = {"open", "high", "low", "close"}
+            if reader.fieldnames is None or not required.issubset({h.lower() for h in reader.fieldnames}):
+                raise ValueError(f"Offline CSV must contain columns: {', '.join(sorted(required))}")
+            for row in reader:
+                try:
+                    o = float(row.get("open"))
+                    h = float(row.get("high"))
+                    l = float(row.get("low"))
+                    c = float(row.get("close"))
+                except (TypeError, ValueError):
+                    continue
+                feed.append(Candle(open=o, high=h, low=l, close=c))
+        return feed
+
     def _generate_offline_scenario(self, scenario: str, length: int = 500) -> List[Candle]:
         base = 88000.0
         prices: List[Candle] = []
@@ -421,7 +446,11 @@ class GridBot:
 
     def _prepare_offline_feed(self) -> None:
         prices: List[Candle] = []
-        if self.offline_scenario:
+        if self.offline_csv:
+            prices = self._load_offline_csv(self.offline_csv)
+        if not prices and self.offline_scenario:
+            if self.offline_scenario == "from_csv_ohlc":
+                raise ValueError("offline-scenario from_csv_ohlc requires --offline-csv path")
             prices = self._generate_offline_scenario(self.offline_scenario)
         if not prices:
             prices = self._load_offline_prices()

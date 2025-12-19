@@ -52,6 +52,7 @@ def run_once(
     steps: int,
     interval: float,
     base_log_level: str,
+    offline_csv: Optional[str] = None,
 ) -> dict:
     run_id = f"{strategy_id}_{scenario}_seed{seed}"
     db_path = out_dir / "db" / f"{run_id}.db"
@@ -65,6 +66,8 @@ def run_once(
         "--offline",
         "--offline-scenario",
         scenario,
+        "--offline-csv",
+        offline_csv or "",
         "--seed",
         str(seed),
         "--max-steps",
@@ -143,11 +146,15 @@ def main_cli(argv=None) -> None:
     parser.add_argument("--out-dir", default="out_runs/", help="Output directory for reports and DBs")
     parser.add_argument("--strategy-ids", default="classic_grid", help="Strategy ids (comma or space separated)", nargs="?")
     parser.add_argument(
-        "--scenarios", default="range,trend_up,trend_down,flash_crash", help="Offline scenarios", nargs="?"
+        "--scenarios",
+        default="range,trend_up,trend_down,flash_crash,from_csv_ohlc",
+        help="Offline scenarios",
+        nargs="?",
     )
     parser.add_argument("--seeds", default="1,2,3,4,5", help="Seeds", nargs="?")
     parser.add_argument("--steps", type=int, default=500, help="Max steps per run")
     parser.add_argument("--config", default="tests/fixtures/config_small.yaml", help="Path to config file")
+    parser.add_argument("--offline-csv", help="Path to CSV with OHLC for from_csv_ohlc scenario")
     parser.add_argument("--interval", type=float, default=0.0, help="Interval between ticks")
     parser.add_argument("--log-level", default="WARNING", help="Log level for sub-runs")
     parser.add_argument("--parallel", type=int, default=1, help="Parallel workers (>=1, currently sequential)")
@@ -177,7 +184,9 @@ def main_cli(argv=None) -> None:
         for scenario in scenarios:
             for seed in seeds:
                 logging.getLogger(__name__).info(f"Running {strategy}/{scenario}/seed{seed}")
-                res = run_once(out_dir, config_path, strategy, scenario, seed, args.steps, args.interval, args.log_level)
+                res = run_once(
+                    out_dir, config_path, strategy, scenario, seed, args.steps, args.interval, args.log_level, args.offline_csv
+                )
                 results.append(res)
                 if args.fail_fast and res.get("status") == "ERROR":
                     break
