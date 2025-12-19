@@ -32,3 +32,16 @@ trade_history.csv
 
 # OS specific
 .DS_Store
+
+# runtime / generated
+out/
+out_runs/
+*.db
+trade_history.csv
+orders.json
+.env
+
+# python caches
+__pycache__/
+.pytest_cache/
+*.pyc
