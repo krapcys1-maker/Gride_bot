@@ -28,7 +28,18 @@ class GridBot:
         offline: Optional[bool] = None,
         offline_scenario: Optional[str] = None,
         offline_once: bool = False,
+        seed: Optional[int] = None,
     ) -> None:
+        if config_path is None:
+            config_path = CONFIG_FILE
+        if db_path is None:
+            db_path = DB_FILE
+        if not isinstance(config_path, Path):
+            config_path = Path(config_path)
+        if not isinstance(db_path, Path):
+            db_path = Path(db_path)
+        if seed is not None:
+            random.seed(seed)
         self.dry_run = dry_run
         self.config = load_config(config_path)
         offline_requested = (
@@ -542,7 +553,7 @@ class GridBot:
             print("!" * 50 + "\n")
             time.sleep(5)
 
-    def run(self, interval: float = 10.0) -> None:
+    def run(self, interval: float = 10.0, max_steps: Optional[int] = None) -> None:
         """Start the bot loop: load state, fetch price, and monitor the grid."""
         if self.dry_run:
             print("Dry-run mode: skipping balance check.")
@@ -565,6 +576,7 @@ class GridBot:
             print("Nie udalo sie zainicjowac siatki - brak ceny startowej.")
             return
 
+        steps = 0
         while True:
             price = self.fetch_current_price()
             if price is not None:
@@ -578,6 +590,10 @@ class GridBot:
                 if self.offline and self.offline_once and self._offline_feed_exhausted:
                     print("[INFO] Offline feed consumed; exiting.")
                     break
+            steps += 1
+            if max_steps is not None and steps >= max_steps:
+                print(f"[INFO] Reached max steps ({max_steps}); exiting.")
+                break
             time.sleep(interval)
 
     def close(self) -> None:

@@ -32,6 +32,26 @@ def parse_args(argv=None) -> argparse.Namespace:
         action="store_true",
         help="Do not loop offline feed; exit when prices are exhausted",
     )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        help="Limit main loop iterations for testing; exits cleanly after N steps",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        help="Path to config.yaml (default: config.yaml)",
+    )
+    parser.add_argument(
+        "--db-path",
+        type=str,
+        help="Path to SQLite db file (default: grid_bot.db)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="Seed for deterministic offline scenarios",
+    )
     return parser.parse_args(argv)
 
 
@@ -45,18 +65,24 @@ def main(argv=None) -> None:
             offline=offline_mode,
             offline_scenario=args.offline_scenario,
             offline_once=args.offline_once,
+            config_path=args.config,
+            db_path=args.db_path,
+            seed=args.seed,
         )
         if forced_dry_run
         else GridBot(
             offline=offline_mode,
             offline_scenario=args.offline_scenario,
             offline_once=args.offline_once,
+            config_path=args.config,
+            db_path=args.db_path,
+            seed=args.seed,
         )
     )
     try:
         if args.reset_state:
             bot.reset_state()
-        bot.run(interval=args.interval)
+        bot.run(interval=args.interval, max_steps=args.max_steps)
     except KeyboardInterrupt:
         print("[INFO] Shutdown requested")
         try:

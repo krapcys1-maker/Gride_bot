@@ -20,8 +20,8 @@ Minimal grid trading scaffold written in Python. Phase 1 focuses on configuratio
 - Enable `offline: true` and provide a feed via `offline_prices: [100.0, 101.5, 102.0]` or create `data/offline_prices.csv` with one price per line.
 - Run with `python main.py` to start without KuCoin API keys.
 - CSV feed format: create `data/offline_prices.csv` with one column `price` (header optional), one value per line (e.g., `100.0`).
-- Repo zawiera przykładowy `data/offline_prices.csv` (zakres ok. 87500–88500).
-- Flagą `--offline-scenario {range,trend_up,trend_down,flash_crash}` wygenerujesz syntetyczny feed, gdy brak CSV/config; `--offline-once` zakończy bota po zużyciu feedu.
+- Repo zawiera przykladowy `data/offline_prices.csv` (zakres ok. 87500-88500).
+- Flaga `--offline-scenario {range,trend_up,trend_down,flash_crash}` wygeneruje syntetyczny feed, gdy brak CSV/config; `--offline-once` zakonczy bota po zuzyciu feedu.
 
 ## CLI Examples
 
@@ -30,3 +30,4 @@ Minimal grid trading scaffold written in Python. Phase 1 focuses on configuratio
 - `python main.py --dry-run --reset-state --interval 1`
 - `python main.py --dry-run --offline --reset-state --interval 1`
 - `python main.py --dry-run --offline --offline-scenario trend_up --offline-once`
+- `python main.py --dry-run --offline --offline-scenario range --seed 42 --max-steps 200 --reset-state --interval 0`
