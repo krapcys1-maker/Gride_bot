@@ -81,6 +81,7 @@ class GridBot:
         self.start_time = datetime.utcnow()
         self.end_time: Optional[datetime] = None
         self.steps_executed = 0
+        self.steps_completed = 0
         self.trade_count = 0
         self.total_fees = 0.0
         self.initial_equity: Optional[float] = None
@@ -790,6 +791,10 @@ class GridBot:
             self.steps_executed = steps
             if max_steps is not None and steps >= max_steps:
                 logger.info(f"Reached max steps ({max_steps}); exiting.")
+                if self.status == "RUNNING":
+                    self.status = "COMPLETED"
+                    if not self.stop_reason:
+                        self.stop_reason = "max_steps"
                 break
             time.sleep(interval)
         self.end_time = datetime.utcnow()
@@ -818,6 +823,12 @@ class GridBot:
         pnl = None
         if self.accounting and self.initial_equity is not None and equity is not None:
             pnl = equity - self.initial_equity
+        accounting_skips = {}
+        if self.accounting:
+            accounting_skips = {
+                "skipped_sell_no_base": self.accounting.skipped_sell_no_base,
+                "skipped_buy_no_quote": self.accounting.skipped_buy_no_quote,
+            }
         report = {
             "config_path": str(self.config_path),
             "config_hash": self._config_hash(),
@@ -827,6 +838,7 @@ class GridBot:
             "status": self.status,
             "reason": self.stop_reason,
             "steps": self.steps_executed,
+            "steps_completed": self.steps_executed,
             "start": self.start_time.isoformat() if self.start_time else None,
             "end": self.end_time.isoformat() if self.end_time else None,
             "metrics": {
@@ -838,6 +850,7 @@ class GridBot:
                 "trades": self.trade_count,
                 "total_fees": self.total_fees,
             },
+            "accounting_skips": accounting_skips,
         }
         logger.info(
             f"Raport koncowy: equity={equity}, pnl={pnl}, trades={self.trade_count}, fees={self.total_fees}, dd%={dd_pct}"

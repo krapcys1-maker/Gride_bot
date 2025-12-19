@@ -23,6 +23,8 @@ class Accounting:
         self.base_qty = float(config.initial_base)
         self.quote_qty = float(config.initial_usdt)
         self.peak_equity = self.equity(None)
+        self.skipped_sell_no_base = 0
+        self.skipped_buy_no_quote = 0
 
     def equity(self, price: Optional[float]) -> float:
         if price is None:
@@ -42,13 +44,21 @@ class Accounting:
         if side_l == "buy":
             total_cost = value + fee
             if self.quote_qty + 1e-12 < total_cost:
-                logger.warning("Accounting: insufficient quote balance for BUY, skipping fill")
+                self.skipped_buy_no_quote += 1
+                if self.skipped_buy_no_quote == 1:
+                    logger.warning("Accounting: insufficient quote balance for BUY, skipping fill")
+                else:
+                    logger.debug("Accounting: insufficient quote balance for BUY, skipping fill")
                 return False, 0.0, self.equity(price)
             self.quote_qty -= total_cost
             self.base_qty += qty
         else:
             if self.base_qty + 1e-12 < qty:
-                logger.warning("Accounting: insufficient base balance for SELL, skipping fill")
+                self.skipped_sell_no_base += 1
+                if self.skipped_sell_no_base == 1:
+                    logger.warning("Accounting: insufficient base balance for SELL, skipping fill")
+                else:
+                    logger.debug("Accounting: insufficient base balance for SELL, skipping fill")
                 return False, 0.0, self.equity(price)
             self.base_qty -= qty
             self.quote_qty += value - fee
@@ -57,4 +67,3 @@ class Accounting:
         if eq > self.peak_equity:
             self.peak_equity = eq
         return True, fee, eq
-

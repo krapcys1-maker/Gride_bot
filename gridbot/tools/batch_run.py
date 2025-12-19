@@ -3,13 +3,26 @@ import csv
 import json
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from gridbot.app import main
 
 
-def parse_list(value: str) -> List[str]:
-    return [item.strip() for item in value.split(",") if item.strip()]
+def parse_list(value: Optional[str], split_on_space: bool = False) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        items = []
+        for v in value:
+            items.extend(parse_list(v))
+        return [i for i in items if i]
+    sep = " " if split_on_space else ","
+    parts = []
+    for token in str(value).replace(",", sep).split(sep):
+        token = token.strip()
+        if token:
+            parts.append(token)
+    return parts
 
 
 def ensure_report(report_path: Path, report: dict) -> None:
@@ -102,6 +115,7 @@ def run_once(
         "scenario": scenario,
         "seed": seed,
         "steps": report.get("steps"),
+        "steps_completed": report.get("steps_completed", report.get("steps")),
         "status": report.get("status"),
         "reason": report.get("reason"),
         "error_type": report.get("error_type", ""),
@@ -111,6 +125,8 @@ def run_once(
         "dd_pct": metrics.get("drawdown_pct"),
         "trades": metrics.get("trades"),
         "fees": metrics.get("total_fees"),
+        "skipped_sell_no_base": report.get("accounting_skips", {}).get("skipped_sell_no_base"),
+        "skipped_buy_no_quote": report.get("accounting_skips", {}).get("skipped_buy_no_quote"),
         "start_ts": report.get("start"),
         "end_ts": report.get("end"),
         "report_path": str(report_path),
@@ -120,11 +136,11 @@ def run_once(
 def main_cli(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Batch run offline simulations")
     parser.add_argument("--out-dir", default="out_runs/", help="Output directory for reports and DBs")
-    parser.add_argument("--strategy-ids", default="classic_grid", help="Comma-separated strategy ids")
+    parser.add_argument("--strategy-ids", default="classic_grid", help="Strategy ids (comma or space separated)", nargs="?")
     parser.add_argument(
-        "--scenarios", default="range,trend_up,trend_down,flash_crash", help="Comma-separated offline scenarios"
+        "--scenarios", default="range,trend_up,trend_down,flash_crash", help="Offline scenarios", nargs="?"
     )
-    parser.add_argument("--seeds", default="1,2,3,4,5", help="Comma-separated seeds")
+    parser.add_argument("--seeds", default="1,2,3,4,5", help="Seeds", nargs="?")
     parser.add_argument("--steps", type=int, default=500, help="Max steps per run")
     parser.add_argument("--config", default="tests/fixtures/config_small.yaml", help="Path to config file")
     parser.add_argument("--interval", type=float, default=0.0, help="Interval between ticks")
@@ -144,6 +160,12 @@ def main_cli(argv=None) -> None:
     strategy_ids = parse_list(args.strategy_ids)
     scenarios = parse_list(args.scenarios)
     seeds = [int(s) for s in parse_list(args.seeds)]
+
+    total_runs = len(strategy_ids) * len(scenarios) * len(seeds)
+    print(f"Preflight: strategies={strategy_ids}, scenarios={scenarios}, seeds={seeds}, total_runs={total_runs}")
+    if total_runs == 0:
+        print("No runs scheduled. Check strategy_ids/scenarios/seeds.")
+        raise SystemExit(2)
 
     results: List[dict] = []
     for strategy in strategy_ids:
@@ -166,6 +188,7 @@ def main_cli(argv=None) -> None:
         "scenario",
         "seed",
         "steps",
+        "steps_completed",
         "status",
         "reason",
         "error_type",
@@ -175,6 +198,8 @@ def main_cli(argv=None) -> None:
         "dd_pct",
         "trades",
         "fees",
+        "skipped_sell_no_base",
+        "skipped_buy_no_quote",
         "start_ts",
         "end_ts",
         "report_path",
@@ -185,19 +210,43 @@ def main_cli(argv=None) -> None:
         for row in results:
             writer.writerow(row)
 
-    top_pnl = sorted([r for r in results if r.get("pnl") is not None], key=lambda x: x["pnl"], reverse=True)[:10]
-    top_dd = sorted(
-        [r for r in results if r.get("dd_pct") is not None],
-        key=lambda x: x["dd_pct"],
-    )[:10]
+    status_counts = {}
+    for r in results:
+        st = (r.get("status") or "UNKNOWN").upper()
+        status_counts[st] = status_counts.get(st, 0) + 1
+    print("Status counts:", status_counts)
 
-    print("TOP PnL:")
-    for r in top_pnl:
-        print(f"{r['run_id']}: pnl={r['pnl']} dd={r.get('dd_pct')}")
+    stopped_reasons = [r.get("reason") for r in results if (r.get("status") or "").upper() == "STOPPED"]
+    error_reasons = [r.get("reason") for r in results if (r.get("status") or "").upper() == "ERROR"]
+    if stopped_reasons:
+        print("Top STOPPED reasons:", stopped_reasons[:5])
+    if error_reasons:
+        print("Top ERROR reasons:", error_reasons[:5])
 
-    print("TOP Low DD:")
-    for r in top_dd:
-        print(f"{r['run_id']}: dd={r.get('dd_pct')} pnl={r.get('pnl')}")
+    ok_runs = [r for r in results if (r.get("status") or "").upper() != "ERROR"]
+    if ok_runs:
+        top_pnl = sorted([r for r in ok_runs if r.get("pnl") is not None], key=lambda x: x["pnl"], reverse=True)[:10]
+        top_dd = sorted(
+            [r for r in ok_runs if r.get("dd_pct") is not None],
+            key=lambda x: x["dd_pct"],
+        )[:10]
+
+        print("TOP PnL:")
+        for r in top_pnl:
+            print(
+                f"{r['run_id']} ({r['scenario']} seed={r['seed']} status={r.get('status')} reason={r.get('reason')}): "
+                f"pnl={r.get('pnl')} dd={r.get('dd_pct')} trades={r.get('trades')}"
+            )
+
+        print("TOP Low DD:")
+        for r in top_dd:
+            print(
+                f"{r['run_id']} ({r['scenario']} seed={r['seed']} status={r.get('status')} reason={r.get('reason')}): "
+                f"dd={r.get('dd_pct')} pnl={r.get('pnl')} trades={r.get('trades')}"
+            )
+    else:
+        print(f"No successful runs. Errors: {len(error_reasons)}. Top reasons: {error_reasons[:5]}")
+    print(f"Results written to {csv_path}")
 
 
 if __name__ == "__main__":
