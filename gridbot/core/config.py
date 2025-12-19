@@ -44,6 +44,14 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
         data["risk"]["max_consecutive_errors"] = 1
     if data["risk"]["pause_seconds"] < 0:
         data["risk"]["pause_seconds"] = 0
+    acct_cfg = data.get("accounting", {})
+    data["accounting"] = {
+        "enabled": bool(acct_cfg.get("enabled", True)),
+        "initial_usdt": float(acct_cfg.get("initial_usdt", 1000.0)),
+        "initial_base": float(acct_cfg.get("initial_base", 0.0)),
+        "fee_rate": float(acct_cfg.get("fee_rate", 0.001)),
+        "slippage_bps": float(acct_cfg.get("slippage_bps", 0.0)),
+    }
     data["offline"] = bool(data.get("offline", False))
     offline_prices = data.get("offline_prices", [])
     if isinstance(offline_prices, list):

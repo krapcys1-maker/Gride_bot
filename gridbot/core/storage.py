@@ -51,6 +51,32 @@ class Storage:
             )
             self.conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS trades_v2 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    amount REAL NOT NULL,
+                    value REAL NOT NULL,
+                    fee REAL NOT NULL,
+                    equity_after REAL
+                )
+                """
+            )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS equity_snapshots (
+                    timestamp TEXT NOT NULL,
+                    price REAL,
+                    base_qty REAL NOT NULL,
+                    quote_qty REAL NOT NULL,
+                    equity REAL NOT NULL
+                )
+                """
+            )
+            self.conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS bot_state (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     lower_price REAL NOT NULL,
@@ -177,9 +203,43 @@ class Storage:
                 ),
             )
         logger.info(
-            f"[ACCOUNTING] zapisano transakcje: {trade_data['side']} {trade_data['amount']} "
+            f"Zapisano transakcje: {trade_data['side']} {trade_data['amount']} "
             f"{trade_data['symbol']} po {trade_data['price']}"
         )
+        if {"fee", "equity_after"}.issubset(trade_data.keys()):
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT INTO trades_v2 (timestamp, symbol, side, price, amount, value, fee, equity_after)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        trade_data["timestamp"],
+                        trade_data["symbol"],
+                        trade_data["side"],
+                        float(trade_data["price"]),
+                        float(trade_data["amount"]),
+                        float(trade_data["value"]),
+                        float(trade_data["fee"]),
+                        trade_data.get("equity_after"),
+                    ),
+                )
+
+    def save_equity_snapshot(self, timestamp: str, price: Optional[float], base_qty: float, quote_qty: float, equity: float) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO equity_snapshots (timestamp, price, base_qty, quote_qty, equity)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    timestamp,
+                    price if price is not None else None,
+                    float(base_qty),
+                    float(quote_qty),
+                    float(equity),
+                ),
+            )
 
     def reset_state(self) -> None:
         """Clear active orders and bot state while keeping trade history."""

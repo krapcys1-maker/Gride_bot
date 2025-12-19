@@ -14,6 +14,7 @@ import ccxt
 from grid_logic import GridCalculator
 
 from .config import CONFIG_FILE, DB_FILE, DRY_RUN, load_config
+from .accounting import Accounting, AccountingConfig
 from .exchange import init_exchange
 from .risk import RiskConfig, RiskEngine
 from .storage import Storage
@@ -71,6 +72,7 @@ class GridBot:
         self.last_price: Optional[float] = None
         self.status_every_seconds = max(status_every_seconds, 0.0)
         self._last_status_log: float = 0.0
+        self._paused_logged: bool = False
 
         risk_cfg = self.config.get("risk", {})
         self.risk_engine = RiskEngine(
@@ -104,6 +106,18 @@ class GridBot:
         )
         self.grid_step = self.calculator.step
         self.grid_ratio = self.calculator.ratio
+        acct_cfg = self.config.get("accounting", {})
+        self.accounting: Optional[Accounting] = None
+        if acct_cfg.get("enabled", True) and (self.dry_run or self.offline):
+            self.accounting = Accounting(
+                AccountingConfig(
+                    enabled=True,
+                    initial_usdt=float(acct_cfg.get("initial_usdt", 1000.0)),
+                    initial_base=float(acct_cfg.get("initial_base", 0.0)),
+                    fee_rate=float(acct_cfg.get("fee_rate", 0.001)),
+                    slippage_bps=float(acct_cfg.get("slippage_bps", 0.0)),
+                )
+            )
 
     def reset_state(self) -> None:
         """Clear persisted state and revert prices to config defaults."""
@@ -534,6 +548,23 @@ class GridBot:
                 "value": trade_value,
                 "fee_estimated": round(trade_value * 0.001, 10),
             }
+            equity_after = None
+            fee_used = None
+            if self.accounting:
+                ok, fee, equity_after = self.accounting.on_fill(order["side"], execution_price, filled_amount)
+                if not ok:
+                    try:
+                        self.storage.delete_active_order(order["id"])
+                        updated_orders.remove(order)
+                    except Exception as exc:  # pragma: no cover
+                        logger.warning(f"Nie udalo sie usunac zlecenia po odrzuceniu fillu {order['id']}: {exc}")
+                    modified = True
+                    continue
+                fee_used = fee
+            if fee_used is None:
+                fee_used = trade_data["fee_estimated"]
+            trade_data["fee"] = fee_used
+            trade_data["equity_after"] = equity_after
             self.log_trade(trade_data)
 
             opposite_side = "sell" if order["side"].lower() == "buy" else "buy"
@@ -624,13 +655,14 @@ class GridBot:
         while True:
             try:
                 price = self.fetch_current_price()
+                equity = self.accounting.equity(price) if self.accounting else None
                 new_status, risk_reason = self.risk_engine.evaluate(
-                    price, self.last_price, self.status, now=time.time()
+                    price, self.last_price, self.status, now=time.time(), equity=equity
                 )
             except Exception as exc:
                 logger.error(f"Unexpected error in price fetch: {exc}")
                 new_status, risk_reason = self.risk_engine.evaluate(
-                    None, self.last_price, self.status, error=exc, now=time.time()
+                    None, self.last_price, self.status, error=exc, now=time.time(), equity=None
                 )
                 if new_status != self.status or (risk_reason and risk_reason != self.stop_reason):
                     self.status = new_status
@@ -691,10 +723,13 @@ class GridBot:
                         self._last_status_log = now_ts
                     else:
                         logger.debug(f"Cena: {price}")
+                    if self.accounting:
+                        equity = self.accounting.equity(price)
+                        self.storage.save_equity_snapshot(datetime.utcnow().isoformat(), price, self.accounting.base_qty, self.accounting.quote_qty, equity)
                 except Exception as exc:
                     logger.error(f"Error in monitor loop: {exc}")
                     new_status, risk_reason = self.risk_engine.evaluate(
-                        None, self.last_price, self.status, error=exc, now=time.time()
+                        None, self.last_price, self.status, error=exc, now=time.time(), equity=None
                     )
                     if new_status != self.status or (risk_reason and risk_reason != self.stop_reason):
                         self.status = new_status

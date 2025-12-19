@@ -41,6 +41,12 @@ def run_bot(tmp_path, extra_args, overrides=None):
 
 
 def test_range_produces_trades(tmp_path):
+    overrides = {
+        "accounting": {
+            "initial_usdt": 5000.0,
+            "initial_base": 0.01,
+        }
+    }
     db_path = run_bot(
         tmp_path,
         [
@@ -56,6 +62,7 @@ def test_range_produces_trades(tmp_path):
             "0",
             "--reset-state",
         ],
+        overrides=overrides,
     )
     conn = sqlite3.connect(db_path)
     trades = conn.execute("SELECT COUNT(*) FROM trades_history").fetchone()[0]
@@ -221,3 +228,39 @@ def test_too_many_errors_stops_and_clears(tmp_path, monkeypatch):
     assert status_row[0] == "STOPPED"
     assert status_row[1] == "too_many_errors"
     assert active_orders == 0
+
+
+def test_trend_down_drawdown_stops(tmp_path):
+    overrides = {
+        "accounting": {
+            "enabled": True,
+            "initial_usdt": 0.0,
+            "initial_base": 0.02,
+        },
+        "risk": {
+            "max_drawdown_pct": 1.0,
+            "max_price_jump_pct": 100.0,
+        },
+    }
+    db_path = run_bot(
+        tmp_path,
+        [
+            "--dry-run",
+            "--offline",
+            "--offline-scenario",
+            "trend_down",
+            "--seed",
+            "4",
+            "--max-steps",
+            "300",
+            "--interval",
+            "0",
+            "--reset-state",
+        ],
+        overrides=overrides,
+    )
+    conn = sqlite3.connect(db_path)
+    status_row = conn.execute("SELECT status, reason FROM bot_state WHERE id = 1").fetchone()
+    conn.close()
+    assert status_row[0] == "STOPPED"
+    assert status_row[1] == "max_drawdown"

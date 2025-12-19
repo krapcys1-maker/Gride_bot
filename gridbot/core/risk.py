@@ -20,6 +20,7 @@ class RiskEngine:
         self.config = config
         self.consecutive_errors = 0
         self.pause_until: Optional[float] = None
+        self.peak_equity: Optional[float] = None
 
     def evaluate(
         self,
@@ -28,6 +29,7 @@ class RiskEngine:
         status: str,
         error: Optional[Exception] = None,
         now: Optional[float] = None,
+        equity: Optional[float] = None,
     ) -> Tuple[str, Optional[str]]:
         if not self.config.enabled:
             return status, None
@@ -59,7 +61,11 @@ class RiskEngine:
                 self.pause_until = now + self.config.pause_seconds
                 return "PAUSED", "price_jump"
 
-        # max_drawdown_pct placeholder: requires equity tracking; skipped for now
+        if equity is not None and self.config.max_drawdown_pct > 0:
+            if self.peak_equity is None or equity > self.peak_equity:
+                self.peak_equity = equity
+            dd_pct = (self.peak_equity - equity) / max(self.peak_equity, 1e-9) * 100
+            if dd_pct >= self.config.max_drawdown_pct:
+                return "STOPPED", "max_drawdown"
 
         return status, None
-
