@@ -32,6 +32,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Sleep interval between price checks (seconds, default: 10)",
     )
     parser.add_argument(
+        "--status-every-seconds",
+        type=float,
+        default=10.0,
+        help="Log heartbeat (price/status) at most once per given seconds (default: 10)",
+    )
+    parser.add_argument(
         "--offline",
         action="store_true",
         help="Offline mode: no exchange connection, use local price feed",
@@ -93,6 +99,7 @@ def main(argv=None) -> None:
             config_path=args.config,
             db_path=args.db_path,
             seed=args.seed,
+            status_every_seconds=args.status_every_seconds,
         )
         if forced_dry_run
         else GridBot(
@@ -102,6 +109,7 @@ def main(argv=None) -> None:
             config_path=args.config,
             db_path=args.db_path,
             seed=args.seed,
+            status_every_seconds=args.status_every_seconds,
         )
     )
     try:

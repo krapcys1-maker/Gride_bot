@@ -34,6 +34,7 @@ class GridBot:
         offline_scenario: Optional[str] = None,
         offline_once: bool = False,
         seed: Optional[int] = None,
+        status_every_seconds: float = 10.0,
     ) -> None:
         if config_path is None:
             config_path = CONFIG_FILE
@@ -68,6 +69,8 @@ class GridBot:
         self.status = "RUNNING"
         self.stop_reason: str = ""
         self.last_price: Optional[float] = None
+        self.status_every_seconds = max(status_every_seconds, 0.0)
+        self._last_status_log: float = 0.0
 
         risk_cfg = self.config.get("risk", {})
         self.risk_engine = RiskEngine(
@@ -306,7 +309,7 @@ class GridBot:
                     order_timestamp = str(order.get("datetime") or now_ts)
 
                 status = order.get("status") or "open"
-                logger.info(f"[LIVE] Zlozono zlecenie {order_id}: {side} {amount} {self.symbol} @ {price}")
+                logger.info(f"Zlozono zlecenie {order_id}: {side} {amount} {self.symbol} @ {price}")
                 return {
                     "id": str(order_id),
                     "symbol": self.symbol,
@@ -463,11 +466,11 @@ class GridBot:
         self.grid_ratio = self.calculator.ratio
         self._save_bot_state()
         self.save_active_orders(orders)
-        logger.info(f"[TRAILING] Przesunieto siatke w gore do zakresu {new_lower}-{new_upper}")
+        logger.info(f"Przesunieto siatke w gore do zakresu {new_lower}-{new_upper}")
 
     def panic_sell(self, current_price: float) -> None:
         """Execute stop-loss: cancel orders, liquidate base, mark bot stopped."""
-        logger.warning("[ALARM] Cena przebila dolny zakres! Wykonano Panic Sell. Kapital zabezpieczony w USDT.")
+        logger.warning("Cena przebila dolny zakres! Wykonano Panic Sell. Kapital zabezpieczony w USDT.")
         active_orders = self.load_active_orders()
         if not self.dry_run:
             for order in active_orders:
@@ -488,7 +491,7 @@ class GridBot:
             if base_free > 0:
                 try:
                     self.exchange.create_order(self.symbol, "market", "sell", base_free)
-                    logger.info(f"[LIVE] Sprzedano {base_free} {base_currency} po cenie rynkowej")
+                    logger.info(f"Sprzedano {base_free} {base_currency} po cenie rynkowej")
                 except Exception as exc:  # pragma: no cover
                     logger.warning(f"Nie udalo sie zrealizowac panic sell: {exc}")
 
@@ -580,11 +583,11 @@ class GridBot:
 
         if self.grid_ratio:
             profit_percent = (self.grid_ratio - 1)
-            logger.info(f"[INFO] Siatka (geometric): krok ~{profit_percent*100:.4f}%")
+            logger.info(f"Siatka (geometric): krok ~{profit_percent*100:.4f}%")
         else:
             grid_range = float(self.upper_price) - float(self.lower_price)
             profit_percent = (grid_range / self.grid_levels) / current_price
-            logger.info(f"[INFO] Siatka: skok co {grid_range / self.grid_levels:.2f} (~{profit_percent*100:.4f}%)")
+            logger.info(f"Siatka: skok co {grid_range / self.grid_levels:.2f} (~{profit_percent*100:.4f}%)")
         if profit_percent < 0.002:
             logger.warning("!" * 50)
             logger.warning(f"CRITICAL WARNING: zysk na kratce to tylko {profit_percent*100:.4f}%!")
@@ -642,9 +645,13 @@ class GridBot:
                 continue
 
             if new_status != self.status or (risk_reason and risk_reason != self.stop_reason):
+                previous_status = self.status
                 self.status = new_status
                 self.stop_reason = risk_reason or ""
                 self._save_bot_state()
+                if previous_status == "PAUSED" and self.status == "RUNNING":
+                    logger.info("Bot resumed")
+                    self._paused_logged = False
 
             if self.status == "STOPPED":
                 if self.risk_engine.config.panic_on_stop:
@@ -652,7 +659,15 @@ class GridBot:
                 break
 
             if self.status == "PAUSED":
-                logger.info(f"Bot paused (reason={self.stop_reason or risk_reason or 'pause'})")
+                if not self.stop_reason and risk_reason:
+                    self.stop_reason = risk_reason
+                if not getattr(self, "_paused_logged", False):
+                    logger.info(
+                        f"Bot paused (reason={self.stop_reason or risk_reason or 'pause'}, for={self.risk_engine.config.pause_seconds}s)"
+                    )
+                    self._paused_logged = True
+                else:
+                    logger.debug("Bot paused; waiting to resume")
                 steps += 1
                 if max_steps is not None and steps >= max_steps:
                     logger.info(f"Reached max steps ({max_steps}); exiting.")
@@ -668,7 +683,14 @@ class GridBot:
                         break
                     self.check_trailing(price)
                     active_orders = self.monitor_grid(price)
-                    logger.info(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
+                    now_ts = time.time()
+                    if self.status_every_seconds <= 0:
+                        logger.debug(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
+                    elif now_ts - self._last_status_log >= self.status_every_seconds:
+                        logger.info(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
+                        self._last_status_log = now_ts
+                    else:
+                        logger.debug(f"Cena: {price}")
                 except Exception as exc:
                     logger.error(f"Error in monitor loop: {exc}")
                     new_status, risk_reason = self.risk_engine.evaluate(
