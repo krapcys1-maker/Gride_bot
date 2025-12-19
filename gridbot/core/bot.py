@@ -1120,6 +1120,8 @@ class GridBot:
                 "equity": equity_final,
                 "equity_initial": equity_initial,
                 "equity_final": equity_final,
+                "base_initial": self.accounting.config.initial_base if self.accounting else None,
+                "quote_initial": self.accounting.config.initial_usdt if self.accounting else None,
                 "pnl": pnl_net,
                 "pnl_net": pnl_net,
                 "pnl_gross": pnl_gross,

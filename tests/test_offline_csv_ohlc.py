@@ -10,7 +10,7 @@ def test_offline_csv_ohlc_runs_and_trades(tmp_path):
     import yaml
 
     data = yaml.safe_load(cfg_src.read_text())
-    data.setdefault("accounting", {})["initial_base"] = 0.01
+    data.setdefault("accounting", {})["initial_base"] = 0.05
     cfg.write_text(yaml.safe_dump(data))
     report_path = tmp_path / "report.json"
     db_path = tmp_path / "bot.db"

@@ -1,0 +1,16 @@
+﻿symbol: BTC/USDT
+lower_price: 80000
+upper_price: 100000
+grid_levels: 80
+order_size: 0.001
+grid_type: geometric
+
+accounting:
+  initial_quote: 1000
+  initial_base: 0.001
+  fee_bps: 0
+  spread_bps: 0
+  slippage_bps: 0
+
+risk:
+  fail_if_below_breakeven: false
