@@ -7,4 +7,10 @@ trailing_up: false
 stop_loss_enabled: true
 grid_type: geometric
 dry_run: true
-
+risk:
+  enabled: true
+  max_consecutive_errors: 3
+  max_price_jump_pct: 2.0
+  pause_seconds: 1
+  max_drawdown_pct: 10.0
+  panic_on_stop: true

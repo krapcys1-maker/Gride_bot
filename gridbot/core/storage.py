@@ -55,7 +55,8 @@ class Storage:
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     lower_price REAL NOT NULL,
                     upper_price REAL NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'RUNNING'
+                    status TEXT NOT NULL DEFAULT 'RUNNING',
+                    reason TEXT DEFAULT ''
                 )
                 """
             )
@@ -63,22 +64,27 @@ class Storage:
                 self.conn.execute("ALTER TABLE bot_state ADD COLUMN status TEXT NOT NULL DEFAULT 'RUNNING'")
             except sqlite3.OperationalError:
                 pass
+            try:
+                self.conn.execute("ALTER TABLE bot_state ADD COLUMN reason TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
 
-    def load_bot_state(self) -> Optional[Tuple[float, float, str]]:
+    def load_bot_state(self) -> Optional[Tuple[float, float, str, str]]:
         """Load persisted price range if available."""
-        cursor = self.conn.execute("SELECT lower_price, upper_price, status FROM bot_state WHERE id = 1")
+        cursor = self.conn.execute("SELECT lower_price, upper_price, status, reason FROM bot_state WHERE id = 1")
         row = cursor.fetchone()
         if row:
             status = str(row["status"]) if "status" in row.keys() else "RUNNING"
-            return float(row["lower_price"]), float(row["upper_price"]), status
+            reason = row["reason"] if "reason" in row.keys() else ""
+            return float(row["lower_price"]), float(row["upper_price"]), status, str(reason or "")
         return None
 
-    def save_bot_state(self, lower_price: float, upper_price: float, status: str) -> None:
+    def save_bot_state(self, lower_price: float, upper_price: float, status: str, reason: str = "") -> None:
         """Persist current price range so trailing survives restarts."""
         with self.conn:
             self.conn.execute(
-                "INSERT OR REPLACE INTO bot_state (id, lower_price, upper_price, status) VALUES (1, ?, ?, ?)",
-                (lower_price, upper_price, status),
+                "INSERT OR REPLACE INTO bot_state (id, lower_price, upper_price, status, reason) VALUES (1, ?, ?, ?, ?)",
+                (lower_price, upper_price, status, reason),
             )
 
     def load_active_orders(self, order_size: float, exchange_id: str) -> List[Dict[str, Any]]:

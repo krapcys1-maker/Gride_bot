@@ -31,6 +31,19 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
     data["trailing_up"] = bool(data.get("trailing_up", False))
     data["stop_loss_enabled"] = bool(data.get("stop_loss_enabled", True))
     data["grid_type"] = str(data.get("grid_type", "arithmetic")).lower()
+    risk_cfg = data.get("risk", {})
+    data["risk"] = {
+        "enabled": bool(risk_cfg.get("enabled", True)),
+        "max_consecutive_errors": int(risk_cfg.get("max_consecutive_errors", 5)),
+        "max_price_jump_pct": float(risk_cfg.get("max_price_jump_pct", 3.0)),
+        "pause_seconds": float(risk_cfg.get("pause_seconds", 60)),
+        "max_drawdown_pct": float(risk_cfg.get("max_drawdown_pct", 10.0)),
+        "panic_on_stop": bool(risk_cfg.get("panic_on_stop", True)),
+    }
+    if data["risk"]["max_consecutive_errors"] < 1:
+        data["risk"]["max_consecutive_errors"] = 1
+    if data["risk"]["pause_seconds"] < 0:
+        data["risk"]["pause_seconds"] = 0
     data["offline"] = bool(data.get("offline", False))
     offline_prices = data.get("offline_prices", [])
     if isinstance(offline_prices, list):

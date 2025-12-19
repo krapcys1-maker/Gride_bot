@@ -15,6 +15,7 @@ from grid_logic import GridCalculator
 
 from .config import CONFIG_FILE, DB_FILE, DRY_RUN, load_config
 from .exchange import init_exchange
+from .risk import RiskConfig, RiskEngine
 from .storage import Storage
 
 
@@ -65,6 +66,20 @@ class GridBot:
         self.trailing_up = bool(self.config["trailing_up"])
         self.stop_loss_enabled = bool(self.config["stop_loss_enabled"])
         self.status = "RUNNING"
+        self.stop_reason: str = ""
+        self.last_price: Optional[float] = None
+
+        risk_cfg = self.config.get("risk", {})
+        self.risk_engine = RiskEngine(
+            RiskConfig(
+                enabled=bool(risk_cfg.get("enabled", True)),
+                max_consecutive_errors=int(risk_cfg.get("max_consecutive_errors", 5)),
+                max_price_jump_pct=float(risk_cfg.get("max_price_jump_pct", 3.0)),
+                pause_seconds=float(risk_cfg.get("pause_seconds", 60)),
+                max_drawdown_pct=float(risk_cfg.get("max_drawdown_pct", 10.0)),
+                panic_on_stop=bool(risk_cfg.get("panic_on_stop", True)),
+            )
+        )
 
         self._offline_price_cycle: Optional[Iterable[float]] = None
         self._offline_feed_exhausted = False
@@ -93,6 +108,7 @@ class GridBot:
         self.lower_price = float(self.config["lower_price"])
         self.upper_price = float(self.config["upper_price"])
         self.status = "RUNNING"
+        self.stop_reason = ""
         self.calculator = GridCalculator(
             lower_price=self.lower_price,
             upper_price=self.upper_price,
@@ -108,13 +124,14 @@ class GridBot:
     def _load_bot_state(self) -> None:
         state = self.storage.load_bot_state()
         if state:
-            lower_price, upper_price, status = state
+            lower_price, upper_price, status, reason = state
             self.lower_price = lower_price
             self.upper_price = upper_price
             self.status = status
+            self.stop_reason = reason
 
     def _save_bot_state(self) -> None:
-        self.storage.save_bot_state(self.lower_price, self.upper_price, self.status)
+        self.storage.save_bot_state(self.lower_price, self.upper_price, self.status, self.stop_reason)
 
     def _load_offline_prices(self) -> List[float]:
         feed: List[float] = []
@@ -227,7 +244,20 @@ class GridBot:
     def mark_stopped(self) -> None:
         """Persist STOPPED status."""
         self.status = "STOPPED"
+        if not self.stop_reason:
+            self.stop_reason = "manual_stop"
         self._save_bot_state()
+
+    def _panic_clear_orders(self) -> None:
+        """Clear active orders and cancel on exchange if live."""
+        active_orders = self.load_active_orders()
+        if not self.dry_run:
+            for order in active_orders:
+                try:
+                    self.exchange.cancel_order(order["id"], self.symbol)
+                except Exception as exc:  # pragma: no cover
+                    logger.warning(f"Nie udalo sie anulowac zlecenia {order['id']}: {exc}")
+        self.storage.clear_active_orders()
 
     def load_active_orders(self) -> List[Dict[str, Any]]:
         exchange_id = getattr(self.exchange, "id", "exchange")
@@ -463,6 +493,7 @@ class GridBot:
                     logger.warning(f"Nie udalo sie zrealizowac panic sell: {exc}")
 
         self.status = "STOPPED"
+        self.stop_reason = "stop_loss"
         self._save_bot_state()
 
     def monitor_grid(
@@ -585,16 +616,76 @@ class GridBot:
             logger.error("Nie udalo sie zainicjowac siatki - brak ceny startowej.")
             return
 
+        self.last_price = initial_price
         steps = 0
         while True:
-            price = self.fetch_current_price()
-            if price is not None:
-                if self.stop_loss_enabled and price < self.lower_price:
-                    self.panic_sell(price)
+            try:
+                price = self.fetch_current_price()
+                new_status, risk_reason = self.risk_engine.evaluate(
+                    price, self.last_price, self.status, now=time.time()
+                )
+            except Exception as exc:
+                logger.error(f"Unexpected error in price fetch: {exc}")
+                new_status, risk_reason = self.risk_engine.evaluate(
+                    None, self.last_price, self.status, error=exc, now=time.time()
+                )
+                if new_status != self.status or (risk_reason and risk_reason != self.stop_reason):
+                    self.status = new_status
+                    if risk_reason:
+                        self.stop_reason = risk_reason
+                    self._save_bot_state()
+                if self.status == "STOPPED":
+                    if self.risk_engine.config.panic_on_stop:
+                        self._panic_clear_orders()
                     break
-                self.check_trailing(price)
-                active_orders = self.monitor_grid(price)
-                logger.info(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
+                time.sleep(interval)
+                continue
+
+            if new_status != self.status or (risk_reason and risk_reason != self.stop_reason):
+                self.status = new_status
+                self.stop_reason = risk_reason or ""
+                self._save_bot_state()
+
+            if self.status == "STOPPED":
+                if self.risk_engine.config.panic_on_stop:
+                    self._panic_clear_orders()
+                break
+
+            if self.status == "PAUSED":
+                logger.info(f"Bot paused (reason={self.stop_reason or risk_reason or 'pause'})")
+                steps += 1
+                if max_steps is not None and steps >= max_steps:
+                    logger.info(f"Reached max steps ({max_steps}); exiting.")
+                    break
+                sleep_time = interval if interval > 0 else min(self.risk_engine.config.pause_seconds, 1.0)
+                time.sleep(sleep_time)
+                continue
+
+            if price is not None:
+                try:
+                    if self.stop_loss_enabled and price < self.lower_price:
+                        self.panic_sell(price)
+                        break
+                    self.check_trailing(price)
+                    active_orders = self.monitor_grid(price)
+                    logger.info(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
+                except Exception as exc:
+                    logger.error(f"Error in monitor loop: {exc}")
+                    new_status, risk_reason = self.risk_engine.evaluate(
+                        None, self.last_price, self.status, error=exc, now=time.time()
+                    )
+                    if new_status != self.status or (risk_reason and risk_reason != self.stop_reason):
+                        self.status = new_status
+                        if risk_reason:
+                            self.stop_reason = risk_reason
+                        self._save_bot_state()
+                    if self.status == "STOPPED":
+                        if self.risk_engine.config.panic_on_stop:
+                            self._panic_clear_orders()
+                        break
+                    time.sleep(interval)
+                    continue
+                self.last_price = price
             else:
                 if self.offline and self.offline_once and self._offline_feed_exhausted:
                     logger.info("Offline feed consumed; exiting.")
