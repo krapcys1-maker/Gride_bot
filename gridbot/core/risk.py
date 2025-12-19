@@ -15,6 +15,8 @@ class RiskConfig:
     noise_pct: float = 0.5
     period_steps: int = 24
     risk_action: str = "EXIT"
+    fail_if_unprofitable_grid: bool = False
+    fail_if_below_breakeven: bool = False
 
 
 class RiskEngine:

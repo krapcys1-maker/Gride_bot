@@ -4,6 +4,7 @@ $paths = @(
     "__pycache__",
     ".pytest_cache",
     "*.pyc",
+    "*.db",
     "trade_history.csv",
     "grid_bot.db"
 )

@@ -22,3 +22,4 @@ accounting:
   fee_bps: 10
   spread_bps: 20
   slippage_bps: 30
+  apply_costs_in_price: true

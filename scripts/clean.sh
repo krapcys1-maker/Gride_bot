@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-targets=("out" "out_runs" "__pycache__" ".pytest_cache" "*.pyc" "trade_history.csv" "grid_bot.db")
+targets=("out" "out_runs" "__pycache__" ".pytest_cache" "*.pyc" "*.db" "trade_history.csv" "grid_bot.db")
 
 for t in "${targets[@]}"; do
   for path in $t; do

@@ -41,3 +41,14 @@ Minimal grid trading scaffold written in Python. Phase 1 focuses on configuratio
 - `dev`: prace bieżące, gałąź do której trafiają zmiany przed stabilizacją.
 - `main`: stabilne wydania.
 - PR flow: twórz/aktualizuj zmiany na `dev`, otwieraj PR z `dev` do `main`, po review merguj do `main`.
+
+## Repo hygiene
+
+- Runtime pliki są ignorowane: `out/`, `out_runs/`, `*.db` (w tym `grid_bot.db`), `*.sqlite*`, `trade_history.csv`, `orders.json`, `.env`, cache Pythona.
+- Użyj czyszczenia: `powershell -ExecutionPolicy Bypass -File scripts/clean.ps1` lub `bash scripts/clean.sh`.
+- Szybka kontrola: `powershell -ExecutionPolicy Bypass -File scripts/check_repo.ps1` (status, tracked outputy, prosty skan tajemnic).
+
+## Safety: hooks
+
+- Zainstaluj lokalny hook blokujący commit wrażliwych plików/sekretów:
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\install_hooks.ps1`

@@ -55,7 +55,7 @@ def test_costs_applied_reduce_pnl_and_report_costs(tmp_path):
     assert base["status"] != "ERROR" and costly["status"] != "ERROR"
     metrics_base = base["metrics"]
     metrics_costly = costly["metrics"]
-    assert metrics_costly["total_fees"] > 0
-    assert metrics_costly["total_slippage"] > 0 or metrics_costly["slippage_spread_cost_est"] > 0
+    assert metrics_costly["total_fees_quote"] > 0
+    assert metrics_costly["spread_cost_est_quote"] > 0 or metrics_costly["slippage_cost_est_quote"] > 0
     assert metrics_costly["pnl_net"] < metrics_base["pnl_net"]
     assert metrics_costly["pnl_gross"] > metrics_costly["pnl_net"]

@@ -8,6 +8,49 @@ CONFIG_FILE = Path("config.yaml")
 DB_FILE = Path("grid_bot.db")
 
 
+def estimate_roundtrip_cost_bps(fee_bps: float, spread_bps: float, slippage_bps: float) -> float:
+    """Approximate round-trip cost in bps."""
+    return 2 * float(fee_bps) + float(spread_bps) + float(slippage_bps)
+
+
+def grid_step_pct(lower_price: float, upper_price: float, grid_levels: int, grid_type: str) -> float:
+    """Estimate grid step percentage (fraction)."""
+    if grid_levels <= 0:
+        return 0.0
+    grid_type = str(grid_type or "").lower()
+    if grid_type == "geometric":
+        ratio = (upper_price / lower_price) ** (1 / grid_levels)
+        return ratio - 1
+    step = (upper_price - lower_price) / grid_levels
+    mid_price = (upper_price + lower_price) / 2
+    if mid_price <= 0:
+        return 0.0
+    return step / mid_price
+
+
+def recommend_grid_levels(lower_price: float, upper_price: float, min_step_bps: float, grid_type: str) -> int:
+    """Return max grid_levels to satisfy min_step_bps (geometric default)."""
+    min_step_frac = float(min_step_bps) / 10000
+    if min_step_frac <= 0:
+        return 1
+    grid_type = str(grid_type or "").lower()
+    if grid_type == "geometric":
+        import math
+
+        ratio_target = 1 + min_step_frac
+        max_levels = int(math.floor(math.log(upper_price / lower_price) / math.log(ratio_target)))
+        return max(max_levels, 1)
+    # arithmetic
+    mid_price = (upper_price + lower_price) / 2
+    if mid_price <= 0:
+        return 1
+    step_price_needed = mid_price * min_step_frac
+    if step_price_needed <= 0:
+        return 1
+    levels = int(math.floor((upper_price - lower_price) / step_price_needed))
+    return max(levels, 1)
+
+
 def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
     """Load strategy settings required for the grid calculator."""
     if not path.exists():
@@ -43,6 +86,8 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
         "noise_pct": float(risk_cfg.get("noise_pct", 0.5)),
         "period_steps": int(risk_cfg.get("period_steps", 24)),
         "risk_action": str(risk_cfg.get("risk_action", "EXIT")).upper(),
+        "fail_if_unprofitable_grid": bool(risk_cfg.get("fail_if_unprofitable_grid", False)),
+        "fail_if_below_breakeven": bool(risk_cfg.get("fail_if_below_breakeven", False)),
     }
     if data["risk"]["max_consecutive_errors"] < 1:
         data["risk"]["max_consecutive_errors"] = 1

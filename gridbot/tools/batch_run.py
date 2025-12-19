@@ -126,6 +126,10 @@ def run_once(
         "trades": metrics.get("trades"),
         "fees": metrics.get("total_fees"),
         "total_slippage": metrics.get("total_slippage"),
+        "grid_step_pct": metrics.get("grid_step_pct"),
+        "roundtrip_cost_pct": metrics.get("roundtrip_cost_pct"),
+        "breakeven_ok": metrics.get("breakeven_ok"),
+        "recommended_grid_levels": metrics.get("recommended_grid_levels"),
         "skipped_sell_no_base": report.get("accounting_skips", {}).get("skipped_sell_no_base"),
         "skipped_buy_no_quote": report.get("accounting_skips", {}).get("skipped_buy_no_quote"),
         "start_ts": report.get("start"),
@@ -200,6 +204,10 @@ def main_cli(argv=None) -> None:
         "trades",
         "fees",
         "total_slippage",
+        "grid_step_pct",
+        "roundtrip_cost_pct",
+        "breakeven_ok",
+        "recommended_grid_levels",
         "skipped_sell_no_base",
         "skipped_buy_no_quote",
         "start_ts",
@@ -237,14 +245,16 @@ def main_cli(argv=None) -> None:
         for r in top_pnl:
             print(
                 f"{r['run_id']} ({r['scenario']} seed={r['seed']} status={r.get('status')} reason={r.get('reason')}): "
-                f"pnl={r.get('pnl')} dd={r.get('dd_pct')} trades={r.get('trades')}"
+                f"pnl={r.get('pnl')} dd={r.get('dd_pct')} trades={r.get('trades')} "
+                f"grid_step_pct={r.get('grid_step_pct')} roundtrip_cost_pct={r.get('roundtrip_cost_pct')}"
             )
 
         print("TOP Low DD:")
         for r in top_dd:
             print(
                 f"{r['run_id']} ({r['scenario']} seed={r['seed']} status={r.get('status')} reason={r.get('reason')}): "
-                f"dd={r.get('dd_pct')} pnl={r.get('pnl')} trades={r.get('trades')}"
+                f"dd={r.get('dd_pct')} pnl={r.get('pnl')} trades={r.get('trades')} "
+                f"grid_step_pct={r.get('grid_step_pct')} roundtrip_cost_pct={r.get('roundtrip_cost_pct')}"
             )
     else:
         print(f"No successful runs. Errors: {len(error_reasons)}. Top reasons: {error_reasons[:5]}")

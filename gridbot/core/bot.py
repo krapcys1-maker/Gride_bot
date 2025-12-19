@@ -15,7 +15,9 @@ from grid_logic import GridCalculator
 
 from .config import CONFIG_FILE, DB_FILE, DRY_RUN, load_config
 from .accounting import Accounting, AccountingConfig
+from .costs import grid_step_pct, recommend_grid_levels, roundtrip_cost_bps, roundtrip_cost_pct
 from .exchange import init_exchange
+from .execution import ExecutionModel
 from gridbot.strategies import get_strategy
 from .risk import RiskConfig, RiskEngine
 from .storage import Storage
@@ -83,13 +85,16 @@ class GridBot:
         self.steps_executed = 0
         self.steps_completed = 0
         self.trade_count = 0
-        self.total_fees = 0.0
-        self.total_slippage = 0.0
-        self.slippage_spread_cost_est = 0.0
+        self.total_fees_quote = 0.0
+        self.slippage_cost_est_quote = 0.0
+        self.spread_cost_est_quote = 0.0
         self.initial_equity: Optional[float] = None
         self.costs_in_price: bool = True
         self.accounting: Optional[Accounting] = None
         self._edge_warned = False
+        self._cost_guard_failed = False
+        self.grid_step_pct_val: Optional[float] = None
+        self.roundtrip_cost_bps_val: Optional[float] = None
 
         risk_cfg = self.config.get("risk", {})
         self.risk_engine = RiskEngine(
@@ -104,6 +109,8 @@ class GridBot:
                 amplitude_pct=float(risk_cfg.get("amplitude_pct", 1.0)),
                 noise_pct=float(risk_cfg.get("noise_pct", 0.5)),
                 period_steps=int(risk_cfg.get("period_steps", 24)),
+                fail_if_unprofitable_grid=bool(risk_cfg.get("fail_if_unprofitable_grid", False)),
+                fail_if_below_breakeven=bool(risk_cfg.get("fail_if_below_breakeven", False)),
             )
         )
 
@@ -128,21 +135,31 @@ class GridBot:
         self.grid_step = self.calculator.step
         self.grid_ratio = self.calculator.ratio
         acct_cfg = self.config.get("accounting", {})
+        self.execution_model: Optional[ExecutionModel] = None
         if acct_cfg.get("enabled", True) and (self.dry_run or self.offline):
             self.costs_in_price = bool(acct_cfg.get("apply_costs_in_price", True))
+            fee_bps = float(acct_cfg.get("fee_bps", 0.0))
+            spread_bps = float(acct_cfg.get("spread_bps", 0.0))
+            slippage_bps = float(acct_cfg.get("slippage_bps", 0.0))
             self.accounting = Accounting(
                 AccountingConfig(
                     enabled=True,
                     initial_usdt=float(acct_cfg.get("initial_usdt", 1000.0)),
                     initial_base=float(acct_cfg.get("initial_base", 0.0)),
                     fee_rate=float(acct_cfg.get("fee_rate", 0.001)),
-                    fee_bps=float(acct_cfg.get("fee_bps", 0.0)),
-                    slippage_bps=float(acct_cfg.get("slippage_bps", 0.0)),
-                    spread_bps=float(acct_cfg.get("spread_bps", 0.0)),
+                    fee_bps=fee_bps,
+                    slippage_bps=slippage_bps,
+                    spread_bps=spread_bps,
                     maker_fee_bps=float(acct_cfg.get("maker_fee_bps", 0.0)),
                     taker_fee_bps=float(acct_cfg.get("taker_fee_bps", 0.0)),
                     apply_costs_in_price=self.costs_in_price,
                 )
+            )
+            self.execution_model = ExecutionModel(
+                fee_bps=fee_bps,
+                spread_bps=spread_bps,
+                slippage_bps=slippage_bps,
+                apply_costs_in_price=self.costs_in_price,
             )
         self.strategy_id = self.config.get("strategy_id", "classic_grid")
         StrategyCls = get_strategy(self.strategy_id)
@@ -210,16 +227,12 @@ class GridBot:
         if not self.accounting:
             return 0.0
         cfg = self.accounting.config
-        fee_bps = 0.0
-        if cfg.maker_fee_bps:
-            fee_bps = cfg.maker_fee_bps
-        elif cfg.fee_bps:
-            fee_bps = cfg.fee_bps
-        elif cfg.fee_rate:
-            fee_bps = cfg.fee_rate * 10000
+        fee_bps = self._effective_fee_rate(maker=True) * 10000
+        if not fee_bps:
+            fee_bps = cfg.fee_bps or 0.0
         spread_bps = cfg.spread_bps or 0.0
         slippage_bps = cfg.slippage_bps or 0.0
-        return 2 * fee_bps + spread_bps + slippage_bps
+        return roundtrip_cost_bps(fee_bps, spread_bps, slippage_bps)
 
     def _breakeven_pct(self) -> float:
         return self.compute_roundtrip_cost_bps() / 10000
@@ -236,15 +249,34 @@ class GridBot:
     def _warn_cost_sanity(self) -> None:
         if not self.accounting or self._edge_warned:
             return
-        step_pct = self._grid_step_pct()
-        if step_pct is None:
-            return
-        breakeven = self._breakeven_pct()
-        if step_pct < breakeven:
+        step_pct = grid_step_pct(self.lower_price, self.upper_price, self.grid_levels, self.grid_type)
+        self.grid_step_pct_val = step_pct
+        breakeven_bps = roundtrip_cost_bps(
+            self.accounting.config.fee_bps or 0.0,
+            self.accounting.config.spread_bps or 0.0,
+            self.accounting.config.slippage_bps or 0.0,
+        )
+        self.roundtrip_cost_bps_val = breakeven_bps
+        safety_factor = 1.2
+        step_pct_value = step_pct * 100 if step_pct is not None else None
+        breakeven_pct = roundtrip_cost_pct(
+            self.accounting.config.fee_bps or 0.0,
+            self.accounting.config.spread_bps or 0.0,
+            self.accounting.config.slippage_bps or 0.0,
+        )
+        min_step_pct = breakeven_pct * safety_factor
+        breakeven_ok = bool(step_pct_value is not None and step_pct_value >= min_step_pct * 100)
+        if not breakeven_ok:
             self._edge_warned = True
+            recommended_levels = recommend_grid_levels(self.lower_price, self.upper_price, self.grid_type, min_step_pct)
             logger.warning(
-                f"Grid step ({step_pct*100:.4f}%) < estimated costs ({breakeven*100:.4f}%) -> negative expectation"
+                f"Grid step {step_pct_value or 0:.4f}% < min_step_pct {min_step_pct*100:.4f}% (breakeven {breakeven_pct*100:.4f}%). "
+                f"Ustaw grid_levels na {recommended_levels} (z {self.grid_levels}), zeby step >= min_step."
             )
+            if self.risk_engine.config.fail_if_unprofitable_grid or self.risk_engine.config.fail_if_below_breakeven:
+                self.status = "STOPPED"
+                self.stop_reason = "unprofitable_grid"
+                self._cost_guard_failed = True
 
     def _grid_step_bps(self, price: Optional[float]) -> Optional[float]:
         if price is None or price <= 0:
@@ -264,8 +296,7 @@ class GridBot:
         if step_bps is None:
             return
         roundtrip_bps = self.compute_roundtrip_cost_bps()
-        safety_bps = 1.0
-        threshold = roundtrip_bps + safety_bps
+        threshold = roundtrip_bps * 1.25
         if step_bps >= threshold:
             return
         target_levels: Optional[int] = None
@@ -714,22 +745,15 @@ class GridBot:
             equity_after = None
             fee_used = None
             if self.accounting:
-                base_price = float(order["price"])
-                spread_bps = float(self.accounting.config.spread_bps or 0.0)
-                slippage_bps = float(self.accounting.config.slippage_bps or 0.0)
-                impact_frac = (spread_bps / 2 + slippage_bps) / 10000
-                if self.costs_in_price:
-                    if order["side"].lower() == "buy":
-                        execution_price = base_price * (1 + impact_frac)
-                    else:
-                        execution_price = base_price * (1 - impact_frac)
-                else:
-                    execution_price = base_price
+                mid_price = float(order["price"] if fill_price is None else fill_price)
+                slip_cost = 0.0
+                spread_cost = 0.0
+                if self.execution_model:
+                    execution_price = self.execution_model.execution_price(order["side"], mid_price)
+                    slip_cost, spread_cost = self.execution_model.cost_estimates(filled_amount, mid_price)
                 trade_value = round(execution_price * filled_amount, 10)
                 trade_data["price"] = execution_price
                 trade_data["value"] = trade_value
-                slip_cost = filled_amount * base_price * (slippage_bps / 10000)
-                spread_cost = filled_amount * base_price * ((spread_bps / 2) / 10000)
                 fee_rate = self._effective_fee_rate(maker=True)
                 fee_value = trade_value * fee_rate
                 ok, _, equity_after = self.accounting.on_fill(
@@ -746,16 +770,11 @@ class GridBot:
                 fee_used = fee_value
                 if not self.costs_in_price:
                     extra_cost = slip_cost + spread_cost
-                    if order["side"].lower() == "buy":
-                        if self.accounting.quote_qty + 1e-12 < extra_cost:
-                            extra_cost = self.accounting.quote_qty
-                        self.accounting.quote_qty -= extra_cost
-                    else:
-                        deduction = min(self.accounting.quote_qty, extra_cost)
-                        self.accounting.quote_qty -= deduction
+                    deduction = min(self.accounting.quote_qty, extra_cost)
+                    self.accounting.quote_qty -= deduction
                     equity_after = self.accounting.equity(execution_price)
-                self.total_slippage += slip_cost
-                self.slippage_spread_cost_est += spread_cost
+                self.slippage_cost_est_quote += slip_cost
+                self.spread_cost_est_quote += spread_cost
             if fee_used is None:
                 fee_used = trade_data["fee_estimated"]
             trade_data["fee"] = fee_used
@@ -764,7 +783,7 @@ class GridBot:
             self.log_trade(trade_data)
             self.trade_count += 1
             try:
-                self.total_fees += float(trade_data.get("fee") or 0.0)
+                self.total_fees_quote += float(trade_data.get("fee") or 0.0)
             except Exception:
                 pass
 
@@ -844,6 +863,10 @@ class GridBot:
         initial_price = self.fetch_current_price()
         self.risk_check(initial_price)
         self._warn_cost_sanity()
+        if self._cost_guard_failed:
+            self._save_bot_state()
+            self.end_time = datetime.utcnow()
+            return self._final_report()
         self._guard_grid_edge(initial_price)
         if self.status == "STOPPED":
             self._save_bot_state()
@@ -1005,9 +1028,11 @@ class GridBot:
         dd_pct = None
         if equity is not None and peak:
             dd_pct = (peak - equity) / max(peak, 1e-9) * 100
-        pnl = None
-        if self.accounting and self.initial_equity is not None and equity is not None:
-            pnl = equity - self.initial_equity
+        pnl_net = None
+        equity_initial = self.initial_equity
+        equity_final = equity
+        if self.accounting and equity_initial is not None and equity_final is not None:
+            pnl_net = equity_final - equity_initial
         accounting_skips = {}
         if self.accounting:
             accounting_skips = {
@@ -1016,12 +1041,30 @@ class GridBot:
             }
         if self.status == "STOPPED" and self.risk_engine.config.risk_action == "PAUSE" and self.stop_reason == "panic_sell":
             self.stop_reason = "panic_pause"
+        # cost guard metrics
+        acct_cfg = self.config.get("accounting", {})
+        fee_bps_cfg = float(acct_cfg.get("fee_bps", 0.0))
+        spread_bps_cfg = float(acct_cfg.get("spread_bps", 0.0))
+        slippage_bps_cfg = float(acct_cfg.get("slippage_bps", 0.0))
+        roundtrip_cost_bps_val = roundtrip_cost_bps(fee_bps_cfg, spread_bps_cfg, slippage_bps_cfg)
+        roundtrip_cost_pct_val = roundtrip_cost_pct(fee_bps_cfg, spread_bps_cfg, slippage_bps_cfg)
+        step_pct_fraction = grid_step_pct(self.lower_price, self.upper_price, self.grid_levels, self.grid_type)
+        grid_step_pct_val = step_pct_fraction * 100.0 if step_pct_fraction is not None else None
+        self.grid_step_pct_val = step_pct_fraction
+        self.roundtrip_cost_bps_val = roundtrip_cost_bps_val
+        breakeven_ok = None
+        safety_factor = 1.2
+        recommended_levels_val = None
+        if grid_step_pct_val is not None:
+            breakeven_ok = grid_step_pct_val >= (roundtrip_cost_pct_val * safety_factor)
+            recommended_levels_val = recommend_grid_levels(
+                self.lower_price, self.upper_price, self.grid_type, roundtrip_cost_pct_val * safety_factor * 100
+            )
         pnl_gross = None
-        pnl_net = pnl
         if pnl_net is not None:
-            pnl_gross = pnl_net + self.total_fees
+            pnl_gross = pnl_net + self.total_fees_quote
             if not self.costs_in_price:
-                pnl_gross += self.total_slippage + self.slippage_spread_cost_est
+                pnl_gross += self.slippage_cost_est_quote + self.spread_cost_est_quote
         report = {
             "config_path": str(self.config_path),
             "config_hash": self._config_hash(),
@@ -1036,20 +1079,32 @@ class GridBot:
             "end": self.end_time.isoformat() if self.end_time else None,
             "metrics": {
                 "price": price,
-                "equity": equity,
+                "equity": equity_final,
+                "equity_initial": equity_initial,
+                "equity_final": equity_final,
                 "pnl": pnl_net,
                 "pnl_net": pnl_net,
                 "pnl_gross": pnl_gross,
+                "grid_step_pct": grid_step_pct_val,
+                "roundtrip_cost_bps": roundtrip_cost_bps_val,
+                "roundtrip_cost_pct": roundtrip_cost_pct_val,
+                "breakeven_ok": breakeven_ok,
+                "recommended_grid_levels": recommended_levels_val,
+                "breakeven_safety_factor": safety_factor,
                 "peak_equity": peak,
                 "drawdown_pct": dd_pct,
                 "trades": self.trade_count,
-                "total_fees": self.total_fees,
-                "total_slippage": self.total_slippage,
-                "slippage_spread_cost_est": self.slippage_spread_cost_est,
+                "total_fees_quote": self.total_fees_quote,
+                "spread_cost_est_quote": self.spread_cost_est_quote,
+                "slippage_cost_est_quote": self.slippage_cost_est_quote,
+                # legacy keys for compatibility
+                "total_fees": self.total_fees_quote,
+                "total_slippage": self.slippage_cost_est_quote,
+                "slippage_spread_cost_est": self.spread_cost_est_quote,
             },
             "accounting_skips": accounting_skips,
         }
         logger.info(
-            f"Raport koncowy: equity={equity}, pnl={pnl}, trades={self.trade_count}, fees={self.total_fees}, dd%={dd_pct}"
+            f"Raport koncowy: equity={equity_final}, pnl={pnl_net}, trades={self.trade_count}, fees={self.total_fees_quote}, dd%={dd_pct}"
         )
         return report

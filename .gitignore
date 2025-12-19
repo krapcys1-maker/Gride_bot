@@ -16,6 +16,7 @@ build/
 out/
 out_runs/
 grid_bot.db
+*.db
 *.sqlite*
 trade_history.csv
 orders.json
