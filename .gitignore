@@ -5,6 +5,22 @@ __pycache__/
 # Environment variables (CRITICAL)
 .env
 
+# Databases / data
+*.db
+
+# Test/pytest caches
+.pytest_cache/
+
+# Virtual environments
+.venv/
+
+# Build artifacts
+dist/
+build/
+
+# Logs
+*.log
+
 # IDE settings
 .vscode/
 .idea/
