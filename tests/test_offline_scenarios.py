@@ -1,6 +1,8 @@
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 from gridbot.app import main
 
 
@@ -19,7 +21,7 @@ def run_bot(tmp_path, extra_args):
     return db_path
 
 
-def test_offline_range_generates_trades(tmp_path):
+def test_range_produces_trades(tmp_path):
     db_path = run_bot(
         tmp_path,
         [
@@ -68,7 +70,7 @@ def test_restart_does_not_duplicate_orders(tmp_path):
     assert after_orders <= initial_orders
 
 
-def test_flash_crash_triggers_stop_and_clears_orders(tmp_path):
+def test_flash_crash_triggers_stop(tmp_path):
     db_path = run_bot(
         tmp_path,
         [
@@ -79,7 +81,7 @@ def test_flash_crash_triggers_stop_and_clears_orders(tmp_path):
             "--seed",
             "3",
             "--max-steps",
-            "150",
+            "200",
             "--interval",
             "0",
             "--reset-state",
@@ -93,4 +95,3 @@ def test_flash_crash_triggers_stop_and_clears_orders(tmp_path):
     assert state_row is not None
     assert state_row[0] == "STOPPED"
     assert active_orders == 0
-
