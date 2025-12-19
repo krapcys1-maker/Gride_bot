@@ -36,6 +36,7 @@ class GridBot:
         offline_once: bool = False,
         seed: Optional[int] = None,
         status_every_seconds: float = 10.0,
+        report_path: Optional[str] = None,
     ) -> None:
         if config_path is None:
             config_path = CONFIG_FILE
@@ -48,6 +49,7 @@ class GridBot:
         if seed is not None:
             random.seed(seed)
         self.dry_run = dry_run
+        self.config_path = config_path
         self.config = load_config(config_path)
         offline_requested = (
             bool(offline)
@@ -57,6 +59,7 @@ class GridBot:
         self.offline = offline_requested
         self.offline_once = offline_once
         self.offline_scenario = offline_scenario
+        self.seed = seed
         if self.offline:
             self.dry_run = True
         self.symbol = str(self.config["symbol"])
@@ -73,6 +76,13 @@ class GridBot:
         self.status_every_seconds = max(status_every_seconds, 0.0)
         self._last_status_log: float = 0.0
         self._paused_logged: bool = False
+        self.report_path = report_path
+        self.start_time = datetime.utcnow()
+        self.end_time: Optional[datetime] = None
+        self.steps_executed = 0
+        self.trade_count = 0
+        self.total_fees = 0.0
+        self.initial_equity: Optional[float] = None
 
         risk_cfg = self.config.get("risk", {})
         self.risk_engine = RiskEngine(
@@ -118,6 +128,11 @@ class GridBot:
                     slippage_bps=float(acct_cfg.get("slippage_bps", 0.0)),
                 )
             )
+        if self.accounting:
+            initial_price = self.fetch_current_price()
+            self.initial_equity = self.accounting.equity(initial_price)
+            if self.risk_engine.peak_equity is None and self.initial_equity is not None:
+                self.risk_engine.peak_equity = self.initial_equity
 
     def reset_state(self) -> None:
         """Clear persisted state and revert prices to config defaults."""
@@ -566,6 +581,11 @@ class GridBot:
             trade_data["fee"] = fee_used
             trade_data["equity_after"] = equity_after
             self.log_trade(trade_data)
+            self.trade_count += 1
+            try:
+                self.total_fees += float(trade_data.get("fee") or 0.0)
+            except Exception:
+                pass
 
             opposite_side = "sell" if order["side"].lower() == "buy" else "buy"
             if self.grid_ratio:
@@ -650,6 +670,7 @@ class GridBot:
             logger.error("Nie udalo sie zainicjowac siatki - brak ceny startowej.")
             return
 
+        self._save_bot_state()
         self.last_price = initial_price
         steps = 0
         while True:
@@ -719,7 +740,24 @@ class GridBot:
                     if self.status_every_seconds <= 0:
                         logger.debug(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
                     elif now_ts - self._last_status_log >= self.status_every_seconds:
-                        logger.info(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
+                        hb_equity = None
+                        dd_pct = 0.0
+                        if self.accounting:
+                            hb_equity = self.accounting.equity(price)
+                            peak = self.risk_engine.peak_equity or hb_equity or 1e-9
+                            dd_pct = ((peak - (hb_equity or 0)) / peak) * 100 if peak else 0.0
+                        pnl = (
+                            (hb_equity - self.initial_equity)
+                            if self.accounting and self.initial_equity is not None and hb_equity is not None
+                            else None
+                        )
+                        base_qty = self.accounting.base_qty if self.accounting else 0.0
+                        quote_qty = self.accounting.quote_qty if self.accounting else 0.0
+                        eq_str = f"{hb_equity:.2f}" if hb_equity is not None else "n/a"
+                        pnl_str = f"{pnl:.2f}" if pnl is not None else "n/a"
+                        logger.info(
+                            f"Bot dziala. Para: {self.symbol}, Cena: {price}, base={base_qty:.6f}, quote={quote_qty:.2f}, equity={eq_str}, pnl={pnl_str}, dd={dd_pct:.2f}%"
+                        )
                         self._last_status_log = now_ts
                     else:
                         logger.debug(f"Cena: {price}")
@@ -748,11 +786,59 @@ class GridBot:
                     logger.info("Offline feed consumed; exiting.")
                     break
             steps += 1
+            self.steps_executed = steps
             if max_steps is not None and steps >= max_steps:
                 logger.info(f"Reached max steps ({max_steps}); exiting.")
                 break
             time.sleep(interval)
+        self.end_time = datetime.utcnow()
+        return self._final_report()
 
     def close(self) -> None:
         """Close SQLite connection."""
         self.storage.close()
+
+    def _config_hash(self) -> Optional[str]:
+        try:
+            import hashlib
+
+            data = self.config_path.read_bytes()
+            return hashlib.sha1(data).hexdigest()
+        except Exception:
+            return None
+
+    def _final_report(self) -> Dict[str, Any]:
+        price = self.last_price
+        equity = self.accounting.equity(price) if self.accounting else None
+        peak = self.risk_engine.peak_equity if self.risk_engine else None
+        dd_pct = None
+        if equity is not None and peak:
+            dd_pct = (peak - equity) / max(peak, 1e-9) * 100
+        pnl = None
+        if self.accounting and self.initial_equity is not None and equity is not None:
+            pnl = equity - self.initial_equity
+        report = {
+            "config_path": str(self.config_path),
+            "config_hash": self._config_hash(),
+            "offline": self.offline,
+            "scenario": self.offline_scenario,
+            "seed": self.seed,
+            "status": self.status,
+            "reason": self.stop_reason,
+            "steps": self.steps_executed,
+            "start": self.start_time.isoformat() if self.start_time else None,
+            "end": self.end_time.isoformat() if self.end_time else None,
+            "metrics": {
+                "price": price,
+                "equity": equity,
+                "pnl": pnl,
+                "peak_equity": peak,
+                "drawdown_pct": dd_pct,
+                "trades": self.trade_count,
+                "total_fees": self.total_fees,
+            },
+        }
+        logger.info(
+            f"Raport koncowy: equity={equity}, pnl={pnl}, trades={self.trade_count}, fees={self.total_fees}, dd%={dd_pct}"
+        )
+        return report

@@ -129,7 +129,7 @@ def test_price_jump_pauses_then_resumes(tmp_path, monkeypatch):
             self.reset()
 
         def reset(self) -> None:
-            self.values = [88000.0, 91000.0, 91000.0]
+            self.values = [88000.0, 88000.0, 91000.0, 91000.0]
             self.idx = 0
 
         def __call__(self, _self_bot):
@@ -154,7 +154,7 @@ def test_price_jump_pauses_then_resumes(tmp_path, monkeypatch):
             "--dry-run",
             "--offline",
             "--max-steps",
-            "1",
+            "2",
             "--interval",
             "0",
             "--reset-state",

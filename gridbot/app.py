@@ -1,5 +1,6 @@
 import argparse
 import logging
+from pathlib import Path
 from typing import Optional, Sequence
 
 from gridbot.core.bot import GridBot
@@ -81,6 +82,10 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--log-file",
         help="Optional log file path (in addition to console)",
     )
+    parser.add_argument(
+        "--report-json",
+        help="Optional path to write final run report JSON",
+    )
     return parser.parse_args(argv)
 
 
@@ -100,6 +105,7 @@ def main(argv=None) -> None:
             db_path=args.db_path,
             seed=args.seed,
             status_every_seconds=args.status_every_seconds,
+            report_path=args.report_json,
         )
         if forced_dry_run
         else GridBot(
@@ -110,12 +116,17 @@ def main(argv=None) -> None:
             db_path=args.db_path,
             seed=args.seed,
             status_every_seconds=args.status_every_seconds,
+            report_path=args.report_json,
         )
     )
     try:
         if args.reset_state:
             bot.reset_state()
-        bot.run(interval=args.interval, max_steps=args.max_steps)
+        report = bot.run(interval=args.interval, max_steps=args.max_steps)
+        if args.report_json and report:
+            import json
+
+            Path(args.report_json).write_text(json.dumps(report, indent=2))
     except KeyboardInterrupt:
         logger.info("Shutdown requested")
         try:
