@@ -1,0 +1,4 @@
+run_id,strategy_id,scenario,seed,steps,status,reason,final_equity,pnl,dd_pct,trades,fees,start_ts,end_ts,report_path
+classic_grid_range_seed1,classic_grid,range,1,200,RUNNING,,999.7351823378626,-0.264817662137375,0.057412691988894746,1,0.0879772697916911,2025-12-19T11:17:49.080643,2025-12-19T11:17:50.489999,out_runs\reports\classic_grid_range_seed1.json
+classic_grid_range_seed2,classic_grid,range,2,200,RUNNING,,999.6420558194798,-0.357944180520235,0.06490749611786399,1,0.0879772697916911,2025-12-19T11:17:50.497250,2025-12-19T11:17:51.621936,out_runs\reports\classic_grid_range_seed2.json
+classic_grid_range_seed3,classic_grid,range,3,200,RUNNING,,999.6416446850335,-0.3583553149665022,0.0665699807227242,1,0.0879772697916911,2025-12-19T11:17:51.630315,2025-12-19T11:17:52.823587,out_runs\reports\classic_grid_range_seed3.json

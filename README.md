@@ -33,3 +33,4 @@ Minimal grid trading scaffold written in Python. Phase 1 focuses on configuratio
 - `python main.py --dry-run --offline --offline-scenario range --seed 42 --max-steps 200 --reset-state --interval 0`
 - `python main.py --dry-run --offline --offline-scenario range --seed 42 --max-steps 200 --reset-state --interval 0 --log-level DEBUG --log-file gridbot.log`
 - `pytest -q`
+- Batch run example: `python -m gridbot.tools.batch_run --out-dir out_runs --strategy-ids classic_grid --scenarios range --seeds 1,2 --steps 50 --interval 0`

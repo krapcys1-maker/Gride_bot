@@ -1,0 +1,21 @@
+{
+  "config_path": "tests\\fixtures\\config_small.yaml",
+  "config_hash": "c8b9e5de7851f92585223107ec8bea248016c8f7",
+  "offline": true,
+  "scenario": "range",
+  "seed": 3,
+  "status": "RUNNING",
+  "reason": "",
+  "steps": 1000,
+  "start": "2025-12-19T11:18:19.240676",
+  "end": "2025-12-19T11:18:30.490090",
+  "metrics": {
+    "price": 88032.04775090744,
+    "equity": 999.9668006894246,
+    "pnl": -0.03319931057535541,
+    "peak_equity": 1000.307658478433,
+    "drawdown_pct": 0.0340752953473209,
+    "trades": 1,
+    "total_fees": 0.0879772697916911
+  }
+}
