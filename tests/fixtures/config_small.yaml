@@ -1,0 +1,10 @@
+symbol: "BTC/USDT"
+lower_price: 86000
+upper_price: 90000
+grid_levels: 10
+order_size: 0.001
+trailing_up: false
+stop_loss_enabled: true
+grid_type: geometric
+dry_run: true
+
