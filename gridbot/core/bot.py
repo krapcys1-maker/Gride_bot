@@ -1,6 +1,7 @@
 import os
 import time
 from itertools import cycle
+from uuid import uuid4
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -53,6 +54,21 @@ class GridBot:
 
         self._load_bot_state()
 
+        self.calculator = GridCalculator(
+            lower_price=self.lower_price,
+            upper_price=self.upper_price,
+            grid_levels=self.grid_levels,
+            grid_type=self.grid_type,
+        )
+        self.grid_step = self.calculator.step
+        self.grid_ratio = self.calculator.ratio
+
+    def reset_state(self) -> None:
+        """Clear persisted state and revert prices to config defaults."""
+        self.storage.reset_state()
+        self.lower_price = float(self.config["lower_price"])
+        self.upper_price = float(self.config["upper_price"])
+        self.status = "RUNNING"
         self.calculator = GridCalculator(
             lower_price=self.lower_price,
             upper_price=self.upper_price,
@@ -123,6 +139,11 @@ class GridBot:
         except StopIteration:
             return None
 
+    def mark_stopped(self) -> None:
+        """Persist STOPPED status."""
+        self.status = "STOPPED"
+        self._save_bot_state()
+
     def load_active_orders(self) -> List[Dict[str, Any]]:
         exchange_id = getattr(self.exchange, "id", "exchange")
         return self.storage.load_active_orders(self.order_size, exchange_id)
@@ -139,7 +160,8 @@ class GridBot:
         exchange_id = getattr(self.exchange, "id", "exchange")
 
         if self.dry_run:
-            order_id = f"sim_{self.symbol}_{price}"
+            # unikalne id potrzebne, bo active_orders.id jest PRIMARY KEY w SQLite
+            order_id = f"sim_{side}_{self.symbol}_{uuid4().hex}"
             print(f"[DRY RUN] plan zlecenia {side} {amount} {self.symbol} po cenie {price}")
             return {
                 "id": order_id,
@@ -447,7 +469,7 @@ class GridBot:
             print("!" * 50 + "\n")
             time.sleep(5)
 
-    def run(self) -> None:
+    def run(self, interval: float = 10.0) -> None:
         """Start the bot loop: load state, fetch price, and monitor the grid."""
         try:
             balance = self.exchange.fetch_balance()
@@ -476,7 +498,7 @@ class GridBot:
                 self.check_trailing(price)
                 active_orders = self.monitor_grid(price)
                 print(f"Bot dziala. Para: {self.symbol}, Cena: {price}")
-            time.sleep(10)
+            time.sleep(interval)
 
     def close(self) -> None:
         """Close SQLite connection."""

@@ -170,3 +170,9 @@ class Storage:
             f"[ACCOUNTING] zapisano transakcje: {trade_data['side']} {trade_data['amount']} "
             f"{trade_data['symbol']} po {trade_data['price']}"
         )
+
+    def reset_state(self) -> None:
+        """Clear active orders and bot state while keeping trade history."""
+        with self.conn:
+            self.conn.execute("DELETE FROM active_orders")
+            self.conn.execute("DELETE FROM bot_state")
