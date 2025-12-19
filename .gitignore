@@ -21,6 +21,10 @@ out/
 
 # Logs
 *.log
+out_runs/
+trade_history.csv
+*.db
+*.sqlite
 
 # IDE settings
 .vscode/
