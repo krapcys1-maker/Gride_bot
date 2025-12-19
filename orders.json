@@ -40,10 +40,10 @@
         "exchange": "kucoin"
     },
     {
-        "id": "sim_BTC/USDT_87990.0",
+        "id": "sim_BTC/USDT_88000.0",
         "symbol": "BTC/USDT",
-        "side": "buy",
-        "price": 87990.0,
+        "side": "sell",
+        "price": 88000.0,
         "amount": 0.0001,
         "exchange": "kucoin"
     }

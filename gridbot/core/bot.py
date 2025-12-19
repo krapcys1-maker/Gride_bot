@@ -265,7 +265,7 @@ class GridBot:
                 order = self.exchange.create_order(self.symbol, "limit", side, amount, price)
                 order_id = order.get("id") or order.get("orderId")
                 if not order_id:
-                    print(f"[ERROR] Brak ID zlecenia dla {side} {amount}@{price}")
+                    logger.error(f"Brak ID zlecenia dla {side} {amount}@{price}")
                     return None
 
                 raw_ts = order.get("timestamp")
@@ -320,7 +320,7 @@ class GridBot:
                     sells += 1
         if orders:
             self.save_active_orders(orders)
-            logger.info(f"Siatka zainicjowana. Planned/placed {buys} buy and {sells} sell orders")
+            logger.info(f"Placed/Planned {buys} BUY + {sells} SELL orders")
             logger.debug(f"Szczegoly zlecen: {orders}")
         return orders
 
@@ -350,11 +350,11 @@ class GridBot:
         try:
             order_info = self.exchange.fetch_order(order["id"], self.symbol)
         except ccxt.NetworkError as exc:
-            print(f"[WARN] Problem sieci podczas pobierania statusu {order['id']}: {exc}")
+            logger.warning(f"Problem sieci podczas pobierania statusu {order['id']}: {exc}")
             time.sleep(1)
             return "open", None, 0.0
         except Exception as exc:  # pragma: no cover
-            print(f"[WARN] Nie udalo sie pobrac statusu zlecenia {order['id']}: {exc}")
+            logger.warning(f"Nie udalo sie pobrac statusu zlecenia {order['id']}: {exc}")
             return "open", None, 0.0
 
         status = str(order_info.get("status") or "").lower()
