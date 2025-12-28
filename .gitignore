@@ -14,12 +14,20 @@ build/
 
 # Runtime / generated
 out/
+out_*/
+out*/
 out_runs/
+experiments/
 grid_bot.db
 *.db
 *.sqlite*
 trade_history.csv
 orders.json
+all_grid_summary.csv
+grid_rank_summary*
+nobase_by_scenario*
+nobase_rank*
+flash_crash_*.csv
 
 # Logs
 *.log
