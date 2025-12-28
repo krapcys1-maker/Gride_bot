@@ -52,6 +52,8 @@ def test_inventory_drawdown_reason_when_no_trades(tmp_path):
     report = _run(cfg, tmp_path, order_size=0.001)
     assert report["status"] == "STOPPED"
     assert report["reason"] == "inventory_drawdown"
+    assert report["risk_state"] == "PANIC"
+    assert report["risk_action"] == "PANIC_SELL_EXECUTED"
     metrics = report["metrics"]
     assert metrics["inventory_only"] is True
     assert metrics["pnl_total"] is not None
@@ -65,6 +67,8 @@ def test_nobase_zero_trades_pnl_split(tmp_path):
     metrics = report["metrics"]
     assert report["status"] == "STOPPED"
     assert report["reason"] == "panic_sell"
+    assert report["risk_state"] == "PANIC"
+    assert report["risk_action"] == "NONE"
     assert metrics["trades"] == 0
     assert metrics["pnl_total"] == pytest.approx(0.0)
     assert metrics["pnl_trading"] == pytest.approx(0.0)

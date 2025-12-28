@@ -41,5 +41,7 @@ def test_flash_crash_nobase_does_not_panic_stop(tmp_path, grid_levels):
     report = json.loads(report_path.read_text())
     assert report.get("status") == "STOPPED"
     assert report.get("reason") == "panic_sell"
+    assert report.get("risk_state") == "PANIC"
+    assert report.get("risk_action") == "NONE"
     metrics = report.get("metrics", {})
     assert metrics.get("trades", 0) == 0

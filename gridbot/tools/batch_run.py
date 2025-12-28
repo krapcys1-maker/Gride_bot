@@ -42,6 +42,8 @@ def stub_report(run_id: str, strategy_id: str, scenario: str, seed: int, reason:
         "reason": reason,
         "error_type": error_type,
         "metrics": {},
+        "risk_state": "",
+        "risk_action": "",
     }
 
 
@@ -140,6 +142,8 @@ def run_once(
         "reason": report.get("reason"),
         "error_type": report.get("error_type", ""),
         "error_message": report.get("error_message", ""),
+        "risk_state": report.get("risk_state", ""),
+        "risk_action": report.get("risk_action", ""),
         "final_equity": metrics.get("equity"),
         "pnl": metrics.get("pnl"),
         "pnl_net": metrics.get("pnl_net", metrics.get("pnl")),
@@ -257,6 +261,8 @@ def main_cli(argv=None) -> None:
         "reason",
         "error_type",
         "error_message",
+        "risk_state",
+        "risk_action",
         "final_equity",
         "pnl",
         "pnl_net",
