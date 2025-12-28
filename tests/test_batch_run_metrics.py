@@ -35,3 +35,10 @@ def test_batch_run_outputs_cost_metrics(tmp_path, monkeypatch):
     assert "roundtrip_cost_pct" in header
     assert "breakeven_ok" in header
     assert "recommended_grid_levels" in header
+    assert "pnl_net" in header
+    assert "pnl_gross" in header
+    assert "total_fees_quote" in header
+    assert "spread_cost_est_quote" in header
+    assert "slippage_cost_est_quote" in header
+    assert "maker_ratio" in header
+    assert "avg_fee_per_trade" in header

@@ -84,6 +84,8 @@ def test_batch_run_counts_total_runs_with_csv_args(tmp_path):
         "1,2",
         "--steps",
         "20",
+        "--grid-levels",
+        "5,10",
         "--config",
         "tests/fixtures/config_small.yaml",
         "--interval",
@@ -96,4 +98,4 @@ def test_batch_run_counts_total_runs_with_csv_args(tmp_path):
     assert csv_path.exists()
     rows = csv_path.read_text().strip().splitlines()
     # header + 4 runs
-    assert len(rows) == 1 + 4
+    assert len(rows) == 1 + 8

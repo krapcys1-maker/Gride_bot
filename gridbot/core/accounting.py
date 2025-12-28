@@ -11,6 +11,8 @@ class AccountingConfig:
     enabled: bool = True
     initial_usdt: float = 1000.0
     initial_base: float = 0.0
+    initial_inventory_mode: str = "manual"
+    initial_base_value_pct: float = 0.5
     fee_rate: float = 0.001
     fee_bps: float = 0.0
     slippage_bps: float = 0.0

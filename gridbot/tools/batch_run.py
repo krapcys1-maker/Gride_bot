@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+import yaml
+
 from gridbot.app import main
 
 
@@ -53,13 +55,28 @@ def run_once(
     interval: float,
     base_log_level: str,
     offline_csv: Optional[str] = None,
+    grid_levels: Optional[int] = None,
 ) -> dict:
-    run_id = f"{strategy_id}_{scenario}_seed{seed}"
+    grid_suffix = f"_gl{grid_levels}" if grid_levels is not None else ""
+    run_id = f"{strategy_id}_{scenario}_seed{seed}{grid_suffix}"
+    effective_config = config
+    if grid_levels is not None:
+        cfg_dir = out_dir / "configs"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        cfg_path = cfg_dir / f"{config.stem}_gl{grid_levels}.yaml"
+        try:
+            data = yaml.safe_load(config.read_text())
+            if isinstance(data, dict):
+                data["grid_levels"] = grid_levels
+                cfg_path.write_text(yaml.safe_dump(data))
+                effective_config = cfg_path
+        except Exception as exc:  # pragma: no cover
+            logging.getLogger(__name__).warning(f"Could not override grid_levels in config: {exc}")
     db_path = out_dir / "db" / f"{run_id}.db"
     report_path = out_dir / "reports" / f"{run_id}.json"
     args = [
         "--config",
-        str(config),
+        str(effective_config),
         "--db-path",
         str(db_path),
         "--dry-run",
@@ -125,10 +142,19 @@ def run_once(
         "error_message": report.get("error_message", ""),
         "final_equity": metrics.get("equity"),
         "pnl": metrics.get("pnl"),
+        "pnl_net": metrics.get("pnl_net", metrics.get("pnl")),
+        "pnl_gross": metrics.get("pnl_gross"),
         "dd_pct": metrics.get("drawdown_pct"),
         "trades": metrics.get("trades"),
         "fees": metrics.get("total_fees"),
+        "total_fees_quote": metrics.get("total_fees_quote", metrics.get("total_fees")),
         "total_slippage": metrics.get("total_slippage"),
+        "spread_cost_est_quote": metrics.get("spread_cost_est_quote"),
+        "slippage_cost_est_quote": metrics.get("slippage_cost_est_quote"),
+        "maker_fills": metrics.get("maker_fills"),
+        "taker_fills": metrics.get("taker_fills"),
+        "maker_ratio": metrics.get("maker_ratio"),
+        "avg_fee_per_trade": metrics.get("avg_fee_per_trade"),
         "grid_step_pct": metrics.get("grid_step_pct"),
         "roundtrip_cost_pct": metrics.get("roundtrip_cost_pct"),
         "breakeven_ok": metrics.get("breakeven_ok"),
@@ -138,6 +164,7 @@ def run_once(
         "start_ts": report.get("start"),
         "end_ts": report.get("end"),
         "report_path": str(report_path),
+        "grid_levels_used": grid_levels,
     }
 
 
@@ -158,13 +185,20 @@ def main_cli(argv=None) -> None:
     parser.add_argument("--interval", type=float, default=0.0, help="Interval between ticks")
     parser.add_argument("--log-level", default="WARNING", help="Log level for sub-runs")
     parser.add_argument("--parallel", type=int, default=1, help="Parallel workers (>=1, currently sequential)")
+    parser.add_argument("--grid-levels", help="Comma/space-separated grid_levels values to sweep", nargs="?")
     parser.add_argument("--fail-fast", action="store_true", help="Stop on first error")
+    parser.add_argument("--resume", action="store_true", help="Continue in existing out-dir instead of failing")
 
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out_dir)
-    db_dir = out_dir / "db"
+    results_file = out_dir / "results.csv"
+    configs_dir = out_dir / "configs"
     reports_dir = out_dir / "reports"
+    if out_dir.exists() and not args.resume:
+        if results_file.exists() or configs_dir.exists() or reports_dir.exists():
+            raise SystemExit("out-dir already exists with previous results; delete it or run with --resume")
+    db_dir = out_dir / "db"
     for path in [db_dir, reports_dir]:
         path.mkdir(parents=True, exist_ok=True)
 
@@ -173,8 +207,14 @@ def main_cli(argv=None) -> None:
     scenarios = parse_list(args.scenarios)
     seeds = [int(s) for s in parse_list(args.seeds)]
 
-    total_runs = len(strategy_ids) * len(scenarios) * len(seeds)
-    print(f"Preflight: strategies={strategy_ids}, scenarios={scenarios}, seeds={seeds}, total_runs={total_runs}")
+    grid_levels_list = parse_list(args.grid_levels) if args.grid_levels else []
+    grid_levels_values = [int(gl) for gl in grid_levels_list] if grid_levels_list else [None]
+
+    total_runs = len(strategy_ids) * len(scenarios) * len(seeds) * len(grid_levels_values)
+    print(
+        f"Preflight: strategies={strategy_ids}, scenarios={scenarios}, seeds={seeds}, "
+        f"grid_levels={grid_levels_values}, total_runs={total_runs}"
+    )
     if total_runs == 0:
         print("No runs scheduled. Check strategy_ids/scenarios/seeds.")
         raise SystemExit(2)
@@ -182,16 +222,26 @@ def main_cli(argv=None) -> None:
     results: List[dict] = []
     for strategy in strategy_ids:
         for scenario in scenarios:
-            for seed in seeds:
-                logging.getLogger(__name__).info(f"Running {strategy}/{scenario}/seed{seed}")
-                res = run_once(
-                    out_dir, config_path, strategy, scenario, seed, args.steps, args.interval, args.log_level, args.offline_csv
-                )
-                results.append(res)
-                if args.fail_fast and res.get("status") == "ERROR":
+            for grid_levels in grid_levels_values:
+                for seed in seeds:
+                    logging.getLogger(__name__).info(f"Running {strategy}/{scenario}/seed{seed}/gl{grid_levels}")
+                    res = run_once(
+                        out_dir,
+                        config_path,
+                        strategy,
+                        scenario,
+                        seed,
+                        args.steps,
+                        args.interval,
+                        args.log_level,
+                        args.offline_csv,
+                        grid_levels=grid_levels,
+                    )
+                    results.append(res)
+                    if args.fail_fast and res.get("status") == "ERROR":
+                        break
+                if args.fail_fast and results and results[-1].get("status") == "ERROR":
                     break
-            if args.fail_fast and results and results[-1].get("status") == "ERROR":
-                break
         if args.fail_fast and results and results[-1].get("status") == "ERROR":
             break
 
@@ -209,10 +259,19 @@ def main_cli(argv=None) -> None:
         "error_message",
         "final_equity",
         "pnl",
+        "pnl_net",
+        "pnl_gross",
         "dd_pct",
         "trades",
         "fees",
+        "total_fees_quote",
         "total_slippage",
+        "spread_cost_est_quote",
+        "slippage_cost_est_quote",
+        "maker_fills",
+        "taker_fills",
+        "maker_ratio",
+        "avg_fee_per_trade",
         "grid_step_pct",
         "roundtrip_cost_pct",
         "breakeven_ok",
@@ -222,6 +281,7 @@ def main_cli(argv=None) -> None:
         "start_ts",
         "end_ts",
         "report_path",
+        "grid_levels_used",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

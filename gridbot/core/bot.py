@@ -3,6 +3,7 @@ import math
 import os
 import random
 import time
+from collections import deque
 from itertools import cycle
 from uuid import uuid4
 from datetime import datetime
@@ -78,6 +79,7 @@ class GridBot:
         self.status = "RUNNING"
         self.stop_reason: str = ""
         self.last_price: Optional[float] = None
+        self.start_price: Optional[float] = None
         self.status_every_seconds = max(status_every_seconds, 0.0)
         self._last_status_log: float = 0.0
         self._paused_logged: bool = False
@@ -90,6 +92,8 @@ class GridBot:
         self.total_fees_quote = 0.0
         self.slippage_cost_est_quote = 0.0
         self.spread_cost_est_quote = 0.0
+        self.maker_fills = 0
+        self.taker_fills = 0
         self.initial_equity: Optional[float] = None
         self.costs_in_price: bool = True
         self.accounting: Optional[Accounting] = None
@@ -97,6 +101,17 @@ class GridBot:
         self._cost_guard_failed = False
         self.grid_step_pct_val: Optional[float] = None
         self.roundtrip_cost_bps_val: Optional[float] = None
+        self.panic_triggered = False
+        self.panic_trigger_reason: str = ""
+        self.panic_cooldown_steps_remaining = 0
+        self.panic_cooldown_steps_default = 200
+        self.panic_min_position_quote = 1.0
+        self._atr_values = deque(maxlen=14)
+        self._atr: Optional[float] = None
+        self._prev_close: Optional[float] = None
+        self._last_candle: Optional[Candle] = None
+        self._maker_rng = random.Random(seed if seed is not None else 0)
+        self.execution_cfg = self.config.get("execution", {}) if isinstance(self.config.get("execution", {}), dict) else {}
 
         risk_cfg = self.config.get("risk", {})
         self.risk_engine = RiskEngine(
@@ -148,6 +163,8 @@ class GridBot:
                     enabled=True,
                     initial_usdt=float(acct_cfg.get("initial_usdt", 1000.0)),
                     initial_base=float(acct_cfg.get("initial_base", 0.0)),
+                    initial_inventory_mode=str(acct_cfg.get("initial_inventory_mode", "manual")).lower(),
+                    initial_base_value_pct=float(acct_cfg.get("initial_base_value_pct", 0.5)),
                     fee_rate=float(acct_cfg.get("fee_rate", 0.001)),
                     fee_bps=fee_bps,
                     slippage_bps=slippage_bps,
@@ -170,6 +187,21 @@ class GridBot:
                 f"COSTS fee_bps={self.accounting.config.fee_bps}, spread_bps={self.accounting.config.spread_bps}, slippage_bps={self.accounting.config.slippage_bps}"
             )
             initial_price = self.fetch_current_price()
+            self.start_price = initial_price
+            if (
+                self.accounting.config.initial_inventory_mode == "value_neutral"
+                and initial_price is not None
+                and initial_price > 0
+            ):
+                total_quote_value = float(acct_cfg.get("initial_usdt", self.accounting.config.initial_usdt))
+                base_pct = min(1.0, max(0.0, float(acct_cfg.get("initial_base_value_pct", self.accounting.config.initial_base_value_pct))))
+                base_value = total_quote_value * base_pct
+                quote_value = total_quote_value - base_value
+                base_qty = base_value / initial_price if initial_price > 0 else 0.0
+                self.accounting.base_qty = base_qty
+                self.accounting.quote_qty = quote_value
+                self.accounting.config.initial_base = base_qty
+                self.accounting.config.initial_usdt = quote_value
             self.initial_equity = self.accounting.equity(initial_price)
             if self.risk_engine.peak_equity is None and self.initial_equity is not None:
                 self.risk_engine.peak_equity = self.initial_equity
@@ -339,6 +371,52 @@ class GridBot:
             )
             self.status = "STOPPED"
             self.stop_reason = "grid_step_too_small"
+
+    def _grid_step_price(self, reference_price: Optional[float]) -> float:
+        """Return grid step in price terms (supports geometric grids)."""
+        if self.grid_step is not None and self.grid_step > 0:
+            return self.grid_step
+        if self.grid_ratio and reference_price is not None:
+            return max(reference_price * (self.grid_ratio - 1), 0.0)
+        return 0.0
+
+    def _update_atr(self, candle_or_price: Optional[Any]) -> None:
+        """Maintain a simple rolling ATR based on observed candles/prices."""
+        if candle_or_price is None:
+            return
+        if isinstance(candle_or_price, Candle):
+            high, low, close = candle_or_price.high, candle_or_price.low, candle_or_price.close
+        else:
+            try:
+                close = float(candle_or_price)
+            except (TypeError, ValueError):
+                return
+            high = low = close
+        prev_close = self._prev_close
+        if prev_close is None:
+            tr = high - low
+        else:
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        self._prev_close = close
+        self._atr_values.append(tr)
+        if self._atr_values:
+            self._atr = sum(self._atr_values) / len(self._atr_values)
+
+    def _decide_maker(self, reference_price: float) -> bool:
+        """Heuristic maker/taker assignment; defaults to maker-only."""
+        if not self.execution_cfg:
+            return True
+        model = str(self.execution_cfg.get("maker_taker_model") or "").lower()
+        if model != "heuristic":
+            return True
+        base_prob = float(self.execution_cfg.get("maker_base_prob", 1.0))
+        vol_penalty = float(self.execution_cfg.get("volatility_penalty", 0.0))
+        step_price = self._grid_step_price(reference_price)
+        atr_val = self._atr or 0.0
+        ratio = (atr_val / step_price) if step_price > 0 else 0.0
+        ratio_clamped = min(1.0, max(ratio, 0.0))
+        effective_prob = min(1.0, max(base_prob - vol_penalty * ratio_clamped, 0.0))
+        return self._maker_rng.random() < effective_prob
 
     def _load_offline_prices(self) -> List[Candle]:
         feed: List[Candle] = []
@@ -715,29 +793,42 @@ class GridBot:
     def panic_sell(self, current_price: float) -> None:
         """Execute stop-loss: cancel orders, liquidate base, mark bot stopped."""
         logger.warning("Cena przebila dolny zakres! Wykonano Panic Sell. Kapital zabezpieczony w USDT.")
-        active_orders = self.load_active_orders()
-        if not self.dry_run:
-            for order in active_orders:
-                try:
-                    self.exchange.cancel_order(order["id"], self.symbol)
-                except Exception as exc:  # pragma: no cover
-                    logger.warning(f"Nie udalo sie anulowac zlecenia {order['id']}: {exc}")
-        self.storage.clear_active_orders()
+        self.panic_triggered = True
+        self.panic_trigger_reason = "price_drop"
+        self.panic_cooldown_steps_remaining = 0
+        self._panic_clear_orders()
 
         base_currency = self.symbol.split("/")[0]
+        base_balance = float(self.accounting.base_qty) if self.accounting else 0.0
+        exchange_base_free = 0.0
         if not self.dry_run:
             try:
                 balance = self.exchange.fetch_balance()
-                base_free = float(balance.get(base_currency, {}).get("free", 0) or 0)
+                exchange_base_free = float(balance.get(base_currency, {}).get("free", 0) or 0)
             except Exception as exc:  # pragma: no cover
-                base_free = 0.0
                 logger.warning(f"Nie udalo sie pobrac balansu do panic sell: {exc}")
-            if base_free > 0:
-                try:
-                    self.exchange.create_order(self.symbol, "market", "sell", base_free)
-                    logger.info(f"Sprzedano {base_free} {base_currency} po cenie rynkowej")
-                except Exception as exc:  # pragma: no cover
-                    logger.warning(f"Nie udalo sie zrealizowac panic sell: {exc}")
+        base_balance = max(base_balance, exchange_base_free)
+        position_value_quote = (current_price or 0.0) * base_balance
+        has_exposure = base_balance > 0 or position_value_quote > self.panic_min_position_quote
+
+        if not has_exposure:
+            if self.offline or self.exchange is None:
+                self.status = "STOPPED"
+                self.stop_reason = "panic_sell"
+                self._save_bot_state()
+                return
+            self.panic_cooldown_steps_remaining = self.panic_cooldown_steps_default
+            self.status = "PAUSED"
+            self.stop_reason = "panic_sell"
+            self._save_bot_state()
+            return
+
+        if exchange_base_free > 0 and not self.dry_run:
+            try:
+                self.exchange.create_order(self.symbol, "market", "sell", exchange_base_free)
+                logger.info(f"Sprzedano {exchange_base_free} {base_currency} po cenie rynkowej")
+            except Exception as exc:  # pragma: no cover
+                logger.warning(f"Nie udalo sie zrealizowac panic sell: {exc}")
 
         self.status = "STOPPED"
         self.stop_reason = "panic_sell"
@@ -780,17 +871,19 @@ class GridBot:
             }
             equity_after = None
             fee_used = None
+            liquidity_flag = None
             if self.accounting:
                 mid_price = float(order["price"] if fill_price is None else fill_price)
                 slip_cost = 0.0
                 spread_cost = 0.0
+                is_maker = self._decide_maker(mid_price)
                 if self.execution_model:
                     execution_price = self.execution_model.fill_price_limit(order["side"], mid_price)
                     slip_cost, spread_cost = self.execution_model.cost_estimates(filled_amount, mid_price)
                 trade_value = round(execution_price * filled_amount, 10)
                 trade_data["price"] = execution_price
                 trade_data["value"] = trade_value
-                fee_rate = self._effective_fee_rate(maker=True)
+                fee_rate = self._effective_fee_rate(maker=is_maker)
                 fee_value = trade_value * fee_rate
                 ok, _, equity_after = self.accounting.on_fill(
                     order["side"], execution_price, filled_amount, fee_rate=fee_rate
@@ -804,6 +897,11 @@ class GridBot:
                     modified = True
                     continue
                 fee_used = fee_value
+                liquidity_flag = "maker" if is_maker else "taker"
+                if is_maker:
+                    self.maker_fills += 1
+                else:
+                    self.taker_fills += 1
                 if not self.costs_in_price:
                     extra_cost = slip_cost + spread_cost
                     deduction = min(self.accounting.quote_qty, extra_cost)
@@ -815,6 +913,8 @@ class GridBot:
                 fee_used = trade_data["fee_estimated"]
             trade_data["fee"] = fee_used
             trade_data["fee_estimated"] = fee_used
+            if liquidity_flag:
+                trade_data["liquidity"] = liquidity_flag
             trade_data["equity_after"] = equity_after
             self.log_trade(trade_data)
             self.trade_count += 1
@@ -856,11 +956,24 @@ class GridBot:
             if candle is None and self.offline_once:
                 logger.info("Offline feed finished; stopping bot.")
             if isinstance(candle, Candle):
+                self._last_candle = candle
+                self._update_atr(candle)
                 return candle.close
-            return float(candle) if candle is not None else None
+            self._last_candle = None
+            if candle is not None:
+                self._update_atr(candle)
+                try:
+                    return float(candle)
+                except (TypeError, ValueError):
+                    return None
+            return None
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
-            return ticker.get("last") or ticker.get("close")
+            price = ticker.get("last") or ticker.get("close")
+            if price is not None:
+                self._last_candle = None
+                self._update_atr(price)
+            return price
         except Exception as exc:  # pragma: no cover
             logger.error(f"Blad podczas pobierania tickera: {exc}")
             return None
@@ -931,6 +1044,9 @@ class GridBot:
                 new_status, risk_reason = self.risk_engine.evaluate(
                     price, self.last_price, self.status, now=time.time(), equity=equity
                 )
+                if self.panic_cooldown_steps_remaining > 0:
+                    new_status = "PAUSED"
+                    risk_reason = risk_reason or "panic_cooldown"
             except Exception as exc:
                 logger.error(f"Unexpected error in price fetch: {exc}")
                 new_status, risk_reason = self.risk_engine.evaluate(
@@ -972,11 +1088,23 @@ class GridBot:
                     self._paused_logged = True
                 else:
                     logger.debug("Bot paused; waiting to resume")
+                if self.stop_reason == "panic_cooldown" and self.panic_cooldown_steps_remaining > 0:
+                    self.panic_cooldown_steps_remaining -= 1
+                    if self.panic_cooldown_steps_remaining <= 0:
+                        logger.info("Panic cooldown finished; resuming bot")
+                        self.status = "RUNNING"
+                        self.stop_reason = ""
+                        self._paused_logged = False
+                        self._save_bot_state()
+                        continue
                 steps += 1
                 if max_steps is not None and steps >= max_steps:
                     logger.info(f"Reached max steps ({max_steps}); exiting.")
                     break
-                sleep_time = interval if interval > 0 else min(self.risk_engine.config.pause_seconds, 1.0)
+                if self.stop_reason == "panic_cooldown":
+                    sleep_time = interval if interval > 0 else 0.0
+                else:
+                    sleep_time = interval if interval > 0 else min(self.risk_engine.config.pause_seconds, 1.0)
                 time.sleep(sleep_time)
                 continue
 
@@ -1071,6 +1199,14 @@ class GridBot:
         equity_final = equity
         if self.accounting and equity_initial is not None and equity_final is not None:
             pnl_net = equity_final - equity_initial
+        start_price = self.start_price if self.start_price is not None else price
+        pnl_trading = None
+        pnl_inventory_mtm = None
+        if self.accounting and equity_initial is not None and start_price is not None:
+            trading_equity = self.accounting.quote_qty + self.accounting.base_qty * start_price
+            pnl_trading = trading_equity - equity_initial
+            if pnl_net is not None:
+                pnl_inventory_mtm = pnl_net - pnl_trading
         accounting_skips = {}
         if self.accounting:
             accounting_skips = {
@@ -1103,6 +1239,18 @@ class GridBot:
             pnl_gross = pnl_net + self.total_fees_quote
             if not self.costs_in_price:
                 pnl_gross += self.slippage_cost_est_quote + self.spread_cost_est_quote
+        maker_total = self.maker_fills + self.taker_fills
+        maker_ratio = (self.maker_fills / maker_total) if maker_total else None
+        avg_fee = (self.total_fees_quote / self.trade_count) if self.trade_count else None
+        inventory_only = False
+        original_reason = self.stop_reason
+        if self.status == "STOPPED" and self.trade_count == 0 and original_reason in {"max_drawdown", "panic_sell"}:
+            base_initial_cfg = self.accounting.config.initial_base if self.accounting else 0.0
+            effective_start_price = self.start_price if self.start_price is not None else price or 0.0
+            initial_inventory_value = (base_initial_cfg or 0.0) * (effective_start_price or 0.0)
+            if (base_initial_cfg > 0 or initial_inventory_value > 0) and pnl_net is not None and pnl_net < 0:
+                self.stop_reason = "inventory_drawdown"
+                inventory_only = True
         report = {
             "config_path": str(self.config_path),
             "config_hash": self._config_hash(),
@@ -1122,6 +1270,13 @@ class GridBot:
                 "equity_final": equity_final,
                 "base_initial": self.accounting.config.initial_base if self.accounting else None,
                 "quote_initial": self.accounting.config.initial_usdt if self.accounting else None,
+                "start_price": self.start_price,
+                "pnl_total": pnl_net,
+                "pnl_trading": pnl_trading,
+                "pnl_inventory_mtm": pnl_inventory_mtm,
+                "panic_triggered": getattr(self, "panic_triggered", False),
+                "panic_trigger_reason": getattr(self, "panic_trigger_reason", ""),
+                "panic_cooldown_steps": getattr(self, "panic_cooldown_steps_remaining", 0),
                 "pnl": pnl_net,
                 "pnl_net": pnl_net,
                 "pnl_gross": pnl_gross,
@@ -1137,10 +1292,15 @@ class GridBot:
                 "total_fees_quote": self.total_fees_quote,
                 "spread_cost_est_quote": self.spread_cost_est_quote,
                 "slippage_cost_est_quote": self.slippage_cost_est_quote,
+                "maker_fills": self.maker_fills,
+                "taker_fills": self.taker_fills,
+                "maker_ratio": maker_ratio,
+                "avg_fee_per_trade": avg_fee,
                 # legacy keys for compatibility
                 "total_fees": self.total_fees_quote,
                 "total_slippage": self.slippage_cost_est_quote,
                 "slippage_spread_cost_est": self.spread_cost_est_quote,
+                "inventory_only": inventory_only,
             },
             "accounting_skips": accounting_skips,
         }

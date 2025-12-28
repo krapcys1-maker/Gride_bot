@@ -98,6 +98,8 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
         "enabled": bool(acct_cfg.get("enabled", True)),
         "initial_usdt": float(acct_cfg.get("initial_usdt", 1000.0)),
         "initial_base": float(acct_cfg.get("initial_base", 0.0)),
+        "initial_inventory_mode": str(acct_cfg.get("initial_inventory_mode", "manual")).lower(),
+        "initial_base_value_pct": float(acct_cfg.get("initial_base_value_pct", 0.5)),
         "fee_rate": float(acct_cfg.get("fee_rate", 0.001)),
         "fee_bps": float(acct_cfg.get("fee_bps", 0.0)),
         "slippage_bps": float(acct_cfg.get("slippage_bps", 0.0)),
@@ -119,4 +121,13 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
         data["offline_prices"] = parsed_prices
     else:
         data["offline_prices"] = []
+    exec_cfg = data.get("execution", {})
+    if isinstance(exec_cfg, dict):
+        data["execution"] = {
+            "maker_taker_model": str(exec_cfg.get("maker_taker_model", "") or "").lower(),
+            "maker_base_prob": float(exec_cfg.get("maker_base_prob", 1.0)),
+            "volatility_penalty": float(exec_cfg.get("volatility_penalty", 0.0)),
+        }
+    else:
+        data["execution"] = {}
     return data
