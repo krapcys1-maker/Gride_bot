@@ -410,13 +410,7 @@ class GridBot:
         if model != "heuristic":
             return True
         base_prob = float(self.execution_cfg.get("maker_base_prob", 1.0))
-        vol_penalty = float(self.execution_cfg.get("volatility_penalty", 0.0))
-        step_price = self._grid_step_price(reference_price)
-        atr_val = self._atr or 0.0
-        ratio = (atr_val / step_price) if step_price > 0 else 0.0
-        ratio_clamped = min(1.0, max(ratio, 0.0))
-        effective_prob = min(1.0, max(base_prob - vol_penalty * ratio_clamped, 0.0))
-        return self._maker_rng.random() < effective_prob
+        return self._maker_rng.random() < max(0.0, min(1.0, base_prob))
 
     def _load_offline_prices(self) -> List[Candle]:
         feed: List[Candle] = []
