@@ -201,7 +201,13 @@ def weighted_rank(
     return ranked
 
 
-def compute_gates(rows: List[Dict[str, str]], gate_scenarios: List[str]) -> List[Dict[str, str]]:
+def compute_gates(
+    rows: List[Dict[str, str]],
+    gate_scenarios: List[str],
+    gate_max_loss_quote: float,
+    gate_max_dd_pct: float,
+    avg_lookup: Dict[Tuple[str, str, str], Dict[str, float]],
+) -> List[Dict[str, str]]:
     gate_set = set(gate_scenarios)
     agg: Dict[Tuple[str, str, str], Dict[str, int]] = {}
     for row in rows:
@@ -217,9 +223,29 @@ def compute_gates(rows: List[Dict[str, str]], gate_scenarios: List[str]) -> List
             bucket["inventory_drawdown_runs"] += 1
         if _safe_float(row.get("trades", "0")) > 0:
             bucket["trade_runs"] += 1
+    # precompute stopped reason counts
+    reason_counts: Dict[Tuple[str, str, str], Dict[str, int]] = {}
+    for row in rows:
+        if row["scenario"] not in gate_set or row["status"] != "STOPPED":
+            continue
+        key = (row["config"], row["grid_levels"], row["scenario"])
+        bucket = reason_counts.setdefault(key, {})
+        reason = row.get("reason") or ""
+        bucket[reason] = bucket.get(reason, 0) + 1
     out: List[Dict[str, str]] = []
     for (config, grid_levels, scenario), vals in agg.items():
-        gate_pass = vals["trade_runs"] == 0 and vals["inventory_drawdown_runs"] == vals["runs"]
+        avg_key = (config, scenario, grid_levels)
+        avg_vals = avg_lookup.get(avg_key, {})
+        avg_pnl = avg_vals.get("avg_pnl", 0.0)
+        avg_dd = avg_vals.get("avg_dd", 0.0)
+        avg_trades = avg_vals.get("avg_trades", 0.0)
+        gate_pass = (avg_pnl >= -gate_max_loss_quote) and (avg_dd <= gate_max_dd_pct)
+        reasons = reason_counts.get((config, grid_levels, scenario), {})
+        if reasons:
+            top_reason, top_count = sorted(reasons.items(), key=lambda x: x[1], reverse=True)[0]
+            stopped_top = f"{top_reason}:{top_count}"
+        else:
+            stopped_top = ""
         out.append(
             {
                 "config": config,
@@ -229,6 +255,10 @@ def compute_gates(rows: List[Dict[str, str]], gate_scenarios: List[str]) -> List
                 "stopped": str(vals["stopped"]),
                 "inventory_drawdown_runs": str(vals["inventory_drawdown_runs"]),
                 "trade_runs": str(vals["trade_runs"]),
+                "avg_pnl": f"{avg_pnl:.10g}",
+                "avg_dd_pct": f"{avg_dd:.10g}",
+                "avg_trades": f"{avg_trades:.10g}",
+                "stopped_reasons_top": stopped_top,
                 "gate_pass": "true" if gate_pass else "false",
             }
         )
@@ -278,6 +308,18 @@ def main(argv=None) -> None:
         default="flash_crash",
         help="Comma-separated scenarios used for gate checks (risk)",
     )
+    parser.add_argument(
+        "--gate-max-loss-quote",
+        type=float,
+        default=0.0,
+        help="Max allowed average pnl loss (quote) to pass gate (default: 0.0)",
+    )
+    parser.add_argument(
+        "--gate-max-dd-pct",
+        type=float,
+        default=2.0,
+        help="Max allowed average drawdown pct to pass gate (default: 2.0)",
+    )
     args = parser.parse_args(argv)
 
     in_dirs = [Path(p.strip()) for p in args.in_dirs.split(",") if p.strip()]
@@ -302,7 +344,21 @@ def main(argv=None) -> None:
     status_rows = aggregate_status_counts(all_rows)
     stopped_rows = aggregate_stopped_reasons(all_rows)
     weighted_rows = weighted_rank(avg_rows, weights, args.strict, profit_scenarios)
-    gate_rows = compute_gates(all_rows, gate_scenarios)
+    # prepare lookup for gates using avg rows
+    avg_lookup = {}
+    for row in avg_rows:
+        avg_lookup[(row["config"], row["scenario"], row["grid_levels"])] = {
+            "avg_pnl": _safe_float(row.get("avg_pnl", "0")),
+            "avg_dd": _safe_float(row.get("avg_dd", "0")),
+            "avg_trades": _safe_float(row.get("avg_trades", "0")),
+        }
+    gate_rows = compute_gates(
+        all_rows,
+        gate_scenarios,
+        args.gate_max_loss_quote,
+        args.gate_max_dd_pct,
+        avg_lookup,
+    )
 
     avg_path = out_dir / "avg_by_scenario.csv"
     status_path = out_dir / "status_counts.csv"
@@ -322,6 +378,10 @@ def main(argv=None) -> None:
         "stopped",
         "inventory_drawdown_runs",
         "trade_runs",
+        "avg_pnl",
+        "avg_dd_pct",
+        "avg_trades",
+        "stopped_reasons_top",
         "gate_pass",
     ]
     write_csv(gates_path, gate_rows, headers=gate_headers)

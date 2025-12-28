@@ -46,5 +46,7 @@ def test_gate_only_mode(tmp_path, capsys):
     assert gates_path.exists()
     content = gates_path.read_text().strip().splitlines()
     assert len(content) == 2  # header + one row
+    header = content[0].split(",")
+    assert "avg_pnl" in header and "avg_dd_pct" in header and "gate_pass" in header
     captured = capsys.readouterr().out
     assert "No profitability ranking computed" in captured
