@@ -76,6 +76,9 @@ class GridBot:
         self.grid_type = str(self.config.get("grid_type", "arithmetic"))
         self.trailing_up = bool(self.config["trailing_up"])
         self.stop_loss_enabled = bool(self.config["stop_loss_enabled"])
+        exec_cfg_flag = self.config.get("execution", {})
+        if isinstance(exec_cfg_flag, dict):
+            self.stop_loss_enabled = bool(exec_cfg_flag.get("panic_on_range_break", self.stop_loss_enabled))
         self.status = "RUNNING"
         self.stop_reason: str = ""
         self.last_price: Optional[float] = None
@@ -114,6 +117,7 @@ class GridBot:
         self._last_candle: Optional[Candle] = None
         self._maker_rng = random.Random(seed if seed is not None else 0)
         self.execution_cfg = self.config.get("execution", {}) if isinstance(self.config.get("execution", {}), dict) else {}
+        self.panic_on_range_break = bool(self.execution_cfg.get("panic_on_range_break", True))
 
         risk_cfg = self.config.get("risk", {})
         self.risk_engine = RiskEngine(
@@ -983,6 +987,25 @@ class GridBot:
             logger.error(f"Blad podczas pobierania tickera: {exc}")
             return None
 
+    def _price_below_lower(self, price: Any) -> bool:
+        if isinstance(price, Candle):
+            return price.low < self.lower_price
+        try:
+            return float(price) < self.lower_price
+        except Exception:
+            return False
+
+    def _panic_reference_price(self, price: Any) -> float:
+        if isinstance(price, Candle):
+            return float(price.low)
+        try:
+            return float(price)
+        except Exception:
+            return 0.0
+        except Exception as exc:  # pragma: no cover
+            logger.error(f"Blad podczas pobierania tickera: {exc}")
+            return None
+
     def risk_check(self, current_price: Optional[float]) -> None:
         """Warn the operator when potential profit per grid is below exchange fees."""
         if current_price is None:
@@ -1049,6 +1072,16 @@ class GridBot:
                 new_status, risk_reason = self.risk_engine.evaluate(
                     price, self.last_price, self.status, now=time.time(), equity=equity
                 )
+                panic_price = self._last_candle if self._last_candle is not None else price
+                if (
+                    self.stop_loss_enabled
+                    and self.panic_on_range_break
+                    and panic_price is not None
+                    and self._price_below_lower(panic_price)
+                ):
+                    self.panic_sell(self._panic_reference_price(panic_price))
+                    self._save_bot_state()
+                    break
                 if self.panic_cooldown_steps_remaining > 0:
                     new_status = "PAUSED"
                     risk_reason = risk_reason or "panic_cooldown"

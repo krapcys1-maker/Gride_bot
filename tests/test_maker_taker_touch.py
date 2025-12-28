@@ -15,11 +15,14 @@ def _run(cfg_path: Path, tmp_path: Path, label: str, steps: int = 2000) -> dict:
     data = yaml.safe_load(cfg_path.read_text())
     data["grid_levels"] = 5
     data["order_size"] = 0.001
+    data["stop_loss_enabled"] = False
     data["accounting"]["fee_bps"] = 0
     data["accounting"]["slippage_bps"] = 0
     data["accounting"]["spread_bps"] = 0
     data["accounting"]["maker_fee_bps"] = 0
     data["accounting"]["taker_fee_bps"] = 0
+    data.setdefault("execution", {})
+    data["execution"]["panic_on_range_break"] = False
     cfg = tmp_path / f"{label}_cfg.yaml"
     cfg.write_text(yaml.safe_dump(data))
     db_path = tmp_path / f"{label}.db"
