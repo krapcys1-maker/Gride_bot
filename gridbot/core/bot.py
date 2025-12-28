@@ -1068,10 +1068,6 @@ class GridBot:
         while True:
             try:
                 price = self.fetch_current_price()
-                equity = self.accounting.equity(price) if self.accounting else None
-                new_status, risk_reason = self.risk_engine.evaluate(
-                    price, self.last_price, self.status, now=time.time(), equity=equity
-                )
                 panic_price = self._last_candle if self._last_candle is not None else price
                 if (
                     self.stop_loss_enabled
@@ -1082,6 +1078,10 @@ class GridBot:
                     self.panic_sell(self._panic_reference_price(panic_price))
                     self._save_bot_state()
                     break
+                equity = self.accounting.equity(price) if self.accounting else None
+                new_status, risk_reason = self.risk_engine.evaluate(
+                    price, self.last_price, self.status, now=time.time(), equity=equity
+                )
                 if self.panic_cooldown_steps_remaining > 0:
                     new_status = "PAUSED"
                     risk_reason = risk_reason or "panic_cooldown"
