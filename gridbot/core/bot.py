@@ -80,6 +80,8 @@ class GridBot:
         self.stop_reason: str = ""
         self.last_price: Optional[float] = None
         self.start_price: Optional[float] = None
+        self.risk_state: str = "NORMAL"
+        self.risk_action: str = "NONE"
         self.status_every_seconds = max(status_every_seconds, 0.0)
         self._last_status_log: float = 0.0
         self._paused_logged: bool = False
@@ -790,10 +792,13 @@ class GridBot:
         self.panic_triggered = True
         self.panic_trigger_reason = "price_drop"
         self.panic_cooldown_steps_remaining = 0
+        self.risk_state = "PANIC"
+        self.risk_action = "NONE"
         self._panic_clear_orders()
 
         base_currency = self.symbol.split("/")[0]
-        base_balance = float(self.accounting.base_qty) if self.accounting else 0.0
+        acct_base = float(self.accounting.base_qty) if self.accounting else 0.0
+        base_balance = acct_base
         exchange_base_free = 0.0
         if not self.dry_run:
             try:
@@ -817,10 +822,16 @@ class GridBot:
             self._save_bot_state()
             return
 
+        if self.accounting and current_price is not None and acct_base > 0:
+            self.accounting.quote_qty += acct_base * current_price
+            self.accounting.base_qty = 0.0
+            self.risk_action = "PANIC_SELL_EXECUTED"
+
         if exchange_base_free > 0 and not self.dry_run:
             try:
                 self.exchange.create_order(self.symbol, "market", "sell", exchange_base_free)
                 logger.info(f"Sprzedano {exchange_base_free} {base_currency} po cenie rynkowej")
+                self.risk_action = "PANIC_SELL_EXECUTED"
             except Exception as exc:  # pragma: no cover
                 logger.warning(f"Nie udalo sie zrealizowac panic sell: {exc}")
 
@@ -1253,6 +1264,8 @@ class GridBot:
             "seed": self.seed,
             "status": self.status,
             "reason": self.stop_reason,
+            "risk_state": self.risk_state,
+            "risk_action": self.risk_action,
             "steps": self.steps_executed,
             "steps_completed": self.steps_executed,
             "start": self.start_time.isoformat() if self.start_time else None,
