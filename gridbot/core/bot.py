@@ -76,9 +76,7 @@ class GridBot:
         self.grid_type = str(self.config.get("grid_type", "arithmetic"))
         self.trailing_up = bool(self.config["trailing_up"])
         self.stop_loss_enabled = bool(self.config["stop_loss_enabled"])
-        exec_cfg_flag = self.config.get("execution", {})
-        if isinstance(exec_cfg_flag, dict):
-            self.stop_loss_enabled = bool(exec_cfg_flag.get("panic_on_range_break", self.stop_loss_enabled))
+        self.panic_enabled = bool(self.config.get("panic_enabled", True))
         self.status = "RUNNING"
         self.stop_reason: str = ""
         self.last_price: Optional[float] = None
@@ -1071,6 +1069,7 @@ class GridBot:
                 panic_price = self._last_candle if self._last_candle is not None else price
                 if (
                     self.stop_loss_enabled
+                    and self.panic_enabled
                     and self.panic_on_range_break
                     and panic_price is not None
                     and self._price_below_lower(panic_price)

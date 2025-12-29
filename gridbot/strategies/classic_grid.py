@@ -8,9 +8,8 @@ class ClassicGridStrategy(Strategy):
 
     def on_tick(self, price: float, active_orders: List[dict]) -> List[dict]:
         bot = self.bot
-        if bot.stop_loss_enabled and price < bot.lower_price:
+        if bot.stop_loss_enabled and bot.panic_enabled and price < bot.lower_price:
             bot.panic_sell(price)
             return active_orders
         bot.check_trailing(price)
         return bot.monitor_grid(price)
-
