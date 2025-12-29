@@ -32,6 +32,39 @@ def ensure_report(report_path: Path, report: dict) -> None:
     report_path.write_text(json.dumps(report, indent=2))
 
 
+def _parse_value(raw: str):
+    lowered = raw.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    try:
+        if "." in raw:
+            val = float(raw)
+            return val
+        val = int(raw)
+        return val
+    except ValueError:
+        return raw
+
+
+def apply_overrides(config: dict, overrides: List[str]) -> dict:
+    for item in overrides:
+        if "=" not in item:
+            continue
+        key, raw_val = item.split("=", 1)
+        val = _parse_value(raw_val.strip())
+        parts = [p for p in key.split(".") if p]
+        if not parts:
+            continue
+        cursor = config
+        for idx, part in enumerate(parts):
+            if idx == len(parts) - 1:
+                cursor[part] = val
+            else:
+                if part not in cursor or not isinstance(cursor[part], dict):
+                    cursor[part] = {}
+                cursor = cursor[part]
+    return config
+
 def stub_report(run_id: str, strategy_id: str, scenario: str, seed: int, reason: str, error_type: str = "") -> dict:
     return {
         "run_id": run_id,
@@ -192,6 +225,7 @@ def main_cli(argv=None) -> None:
     parser.add_argument("--grid-levels", help="Comma/space-separated grid_levels values to sweep", nargs="?")
     parser.add_argument("--fail-fast", action="store_true", help="Stop on first error")
     parser.add_argument("--resume", action="store_true", help="Continue in existing out-dir instead of failing")
+    parser.add_argument("--set", action="append", default=[], help="Override config values, dot notation key=value")
 
     args = parser.parse_args(argv)
 
@@ -207,6 +241,17 @@ def main_cli(argv=None) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
     config_path = Path(args.config)
+    if args.set:
+        try:
+            cfg_data = yaml.safe_load(config_path.read_text())
+            if isinstance(cfg_data, dict):
+                cfg_data = apply_overrides(cfg_data, args.set)
+                cfg_text = yaml.safe_dump(cfg_data)
+                config_path = out_dir / "applied_config.yaml"
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                config_path.write_text(cfg_text)
+        except Exception as exc:  # pragma: no cover
+            raise SystemExit(f"Failed to apply overrides: {exc}")
     strategy_ids = parse_list(args.strategy_ids)
     scenarios = parse_list(args.scenarios)
     seeds = [int(s) for s in parse_list(args.seeds)]
