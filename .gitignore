@@ -38,3 +38,7 @@ flash_crash_*.csv
 
 # OS specific
 .DS_Store
+
+# local OHLC exports
+ohlc_*.csv
+
