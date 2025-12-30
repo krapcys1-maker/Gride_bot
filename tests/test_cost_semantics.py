@@ -95,10 +95,11 @@ def test_grid_guard_reduces_levels_when_costs_high(tmp_path):
     cfg = Path("tests/fixtures/config_costs.yaml")
     db_path = tmp_path / "guard.db"
     bot = GridBot(config_path=cfg, db_path=db_path, dry_run=True, offline=True, offline_scenario="range")
-    original_levels = bot.grid_levels
+    original_levels = bot.grid_levels_effective
     bot._guard_grid_edge(price=88000.0)
-    assert bot.grid_levels <= original_levels
-    assert bot.grid_levels < original_levels  # adjusted down to restore edge
+    assert bot.grid_levels_effective <= original_levels
+    assert bot.grid_levels_effective < original_levels  # adjusted down to restore edge
+    assert bot.grid_levels == bot.grid_levels_effective or bot.grid_levels == 10
     bot.close()
 
 
