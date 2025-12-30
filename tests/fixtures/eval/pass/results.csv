@@ -1,0 +1,9 @@
+run_id,scenario,status,reason,pnl,dd_pct,trades,grid_levels_effective
+range_1,range,COMPLETED,,5.0,0.5,10,4
+range_2,range,COMPLETED,,6.0,0.4,12,4
+trend_up_1,trend_up,COMPLETED,,4.0,0.8,9,4
+trend_up_2,trend_up,COMPLETED,,3.5,0.6,8,4
+trend_down_1,trend_down,COMPLETED,,1.0,0.9,7,4
+trend_down_2,trend_down,COMPLETED,,0.5,1.0,6,4
+flash_1,flash_crash,STOPPED,panic_sell,0.0,5.0,0,4
+flash_2,flash_crash,STOPPED,panic_sell,0.0,4.5,0,4
