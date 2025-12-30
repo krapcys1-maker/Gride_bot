@@ -5,6 +5,7 @@ import yaml
 
 from gridbot.app import main
 from gridbot.core.bot import GridBot
+from gridbot.core.costs import compute_grid_step_pct
 
 
 def _run_report(tmp_path, base_cfg: Path, label: str, apply_costs_in_price: bool) -> dict:
@@ -143,3 +144,22 @@ def test_cost_warning_not_triggered_when_step_above_costs(tmp_path, caplog):
         bot = GridBot(config_path=cfg, db_path=db_path, dry_run=True, offline=True, offline_scenario="range")
     bot.close()
     assert not any("negative expectation" in rec.message for rec in caplog.records)
+
+
+def test_grid_step_log_uses_effective_levels_after_guard(tmp_path):
+    cfg = Path("tests/fixtures/config_costs_neutral_mix70_nobase.yaml")
+    data = yaml.safe_load(cfg.read_text())
+    data["grid_levels"] = 20
+    data["offline"] = True
+    data["offline_scenario"] = "range"
+    cfg_tmp = tmp_path / "cfg_mix70_gl20.yaml"
+    cfg_tmp.write_text(yaml.safe_dump(data))
+    db_path = tmp_path / "guard_log.db"
+    bot = GridBot(config_path=cfg_tmp, db_path=db_path, dry_run=True, offline=True, offline_scenario="range")
+    bot.risk_check(current_price=88000.0)
+    assert bot.grid_levels_effective < 20
+    report = bot._final_report()
+    metrics = report["metrics"]
+    expected_step = compute_grid_step_pct(bot.lower_price, bot.upper_price, bot.grid_levels_effective, bot.grid_type)
+    assert metrics["grid_step_pct"] == expected_step
+    bot.close()

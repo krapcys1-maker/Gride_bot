@@ -986,6 +986,7 @@ class GridBot:
         if current_price is None:
             return
 
+        self._guard_grid_edge(current_price)
         step_pct_val = compute_grid_step_pct(self.lower_price, self.upper_price, self.grid_levels_effective, self.grid_type)
         profit_percent = step_pct_val if step_pct_val is not None else 0.0
         logger.info(f"Siatka (geometric): krok ~{profit_percent:.4f}% (requested_levels={self.grid_levels}, effective_levels={self.grid_levels_effective})")
