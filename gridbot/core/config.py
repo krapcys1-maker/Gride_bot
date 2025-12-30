@@ -2,6 +2,8 @@ import yaml
 from pathlib import Path
 from typing import Any, Dict
 
+from .costs import grid_step_pct as _grid_step_pct_helper, recommend_grid_levels as _recommend_grid_levels_helper
+
 
 DRY_RUN = True
 CONFIG_FILE = Path("config.yaml")
@@ -15,40 +17,13 @@ def estimate_roundtrip_cost_bps(fee_bps: float, spread_bps: float, slippage_bps:
 
 def grid_step_pct(lower_price: float, upper_price: float, grid_levels: int, grid_type: str) -> float:
     """Estimate grid step percentage (fraction)."""
-    if grid_levels <= 0:
-        return 0.0
-    grid_type = str(grid_type or "").lower()
-    if grid_type == "geometric":
-        ratio = (upper_price / lower_price) ** (1 / grid_levels)
-        return ratio - 1
-    step = (upper_price - lower_price) / grid_levels
-    mid_price = (upper_price + lower_price) / 2
-    if mid_price <= 0:
-        return 0.0
-    return step / mid_price
+    return _grid_step_pct_helper(lower_price, upper_price, grid_levels, grid_type) or 0.0
 
 
 def recommend_grid_levels(lower_price: float, upper_price: float, min_step_bps: float, grid_type: str) -> int:
     """Return max grid_levels to satisfy min_step_bps (geometric default)."""
-    min_step_frac = float(min_step_bps) / 10000
-    if min_step_frac <= 0:
-        return 1
-    grid_type = str(grid_type or "").lower()
-    if grid_type == "geometric":
-        import math
-
-        ratio_target = 1 + min_step_frac
-        max_levels = int(math.floor(math.log(upper_price / lower_price) / math.log(ratio_target)))
-        return max(max_levels, 1)
-    # arithmetic
-    mid_price = (upper_price + lower_price) / 2
-    if mid_price <= 0:
-        return 1
-    step_price_needed = mid_price * min_step_frac
-    if step_price_needed <= 0:
-        return 1
-    levels = int(math.floor((upper_price - lower_price) / step_price_needed))
-    return max(levels, 1)
+    min_step_pct = float(min_step_bps) / 100 if min_step_bps is not None else 0.0
+    return _recommend_grid_levels_helper(lower_price, upper_price, grid_type, min_step_pct)
 
 
 def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:

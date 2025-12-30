@@ -202,6 +202,7 @@ def run_once(
         "end_ts": report.get("end"),
         "report_path": str(report_path),
         "grid_levels_used": grid_levels,
+        "grid_levels_effective": metrics.get("grid_levels_effective", grid_levels),
     }
 
 
@@ -333,6 +334,7 @@ def main_cli(argv=None) -> None:
         "end_ts",
         "report_path",
         "grid_levels_used",
+        "grid_levels_effective",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

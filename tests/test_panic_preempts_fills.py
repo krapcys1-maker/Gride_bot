@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -7,8 +8,6 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-from gridbot.app import main
 
 
 BASE_CFG = Path("tests/fixtures/config_costs_neutral_maker100_nobase.yaml")
@@ -26,6 +25,9 @@ def test_panic_prevents_fills_on_flash_crash_nobase(tmp_path):
     rows = ["open,high,low,close", "88000,88100,84000,84000", "84000,84100,83900,84050"]
     csv_path.write_text("\n".join(rows))
     args = [
+        sys.executable,
+        "-m",
+        "gridbot.app",
         "--config",
         str(cfg_path),
         "--db-path",
@@ -45,8 +47,10 @@ def test_panic_prevents_fills_on_flash_crash_nobase(tmp_path):
         "--reset-state",
         "--report-json",
         str(report_path),
+        "--log-level",
+        "ERROR",
     ]
-    main(args)
+    subprocess.run(args, check=True, cwd=REPO_ROOT)
     report = json.loads(report_path.read_text())
     metrics = report["metrics"]
     assert metrics["trades"] == 0

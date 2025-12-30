@@ -27,6 +27,12 @@ def grid_step_pct(lower_price: float, upper_price: float, grid_levels: int, grid
     return step_abs / mid_price
 
 
+def compute_grid_step_pct(lower_price: float, upper_price: float, grid_levels: int, grid_type: str) -> Optional[float]:
+    """Grid step expressed as percent (0.0 == 0%)."""
+    frac = grid_step_pct(lower_price, upper_price, grid_levels, grid_type)
+    return frac * 100 if frac is not None else None
+
+
 def recommend_grid_levels(lower_price: float, upper_price: float, grid_type: str, min_step_pct: float) -> int:
     """Return maximum grid_levels satisfying min_step_pct (percent)."""
     min_step_frac = min_step_pct / 100.0
@@ -61,7 +67,7 @@ def compute_breakeven_metrics(
     grid_step_pct_val = step_frac * 100 if step_frac is not None else None
     rt_bps = roundtrip_cost_bps(fee_bps, spread_bps, slippage_bps)
     rt_pct = roundtrip_cost_pct(fee_bps, spread_bps, slippage_bps)
-    min_step_pct = rt_pct * safety_factor * 100
+    min_step_pct = rt_pct * safety_factor
     breakeven_ok = None
     recommended_levels = None
     if grid_step_pct_val is not None:

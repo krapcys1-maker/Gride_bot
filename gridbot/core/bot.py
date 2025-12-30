@@ -16,7 +16,7 @@ from grid_logic import GridCalculator
 
 from .config import CONFIG_FILE, DB_FILE, DRY_RUN, load_config
 from .accounting import Accounting, AccountingConfig
-from .costs import grid_step_pct, recommend_grid_levels, roundtrip_cost_bps, roundtrip_cost_pct
+from .costs import compute_grid_step_pct, grid_step_pct, recommend_grid_levels, roundtrip_cost_bps, roundtrip_cost_pct
 from .exchange import init_exchange
 from .execution_model import ExecutionModel, Candle
 from gridbot.strategies import get_strategy
@@ -71,6 +71,7 @@ class GridBot:
         self.symbol = str(self.config["symbol"])
         self.order_size = float(self.config["order_size"])
         self.grid_levels = int(self.config["grid_levels"])
+        self.grid_levels_effective = self.grid_levels
         self.lower_price = float(self.config["lower_price"])
         self.upper_price = float(self.config["upper_price"])
         self.grid_type = str(self.config.get("grid_type", "arithmetic"))
@@ -275,39 +276,32 @@ class GridBot:
         return self.compute_roundtrip_cost_bps() / 10000
 
     def _grid_step_pct(self) -> Optional[float]:
-        if self.grid_ratio:
-            return self.grid_ratio - 1
-        if self.grid_step is not None and self.grid_step > 0:
-            mid_price = (self.lower_price + self.upper_price) / 2
-            if mid_price > 0:
-                return self.grid_step / mid_price
-        return None
+        return grid_step_pct(self.lower_price, self.upper_price, self.grid_levels_effective, self.grid_type)
 
     def _warn_cost_sanity(self) -> None:
         if not self.accounting or self._edge_warned:
             return
-        step_pct = grid_step_pct(self.lower_price, self.upper_price, self.grid_levels, self.grid_type)
-        self.grid_step_pct_val = step_pct
-        breakeven_bps = roundtrip_cost_bps(
-            self.accounting.config.fee_bps or 0.0,
-            self.accounting.config.spread_bps or 0.0,
-            self.accounting.config.slippage_bps or 0.0,
-        )
-        self.roundtrip_cost_bps_val = breakeven_bps
-        safety_factor = 1.2
-        step_pct_value = step_pct * 100 if step_pct is not None else None
+        step_frac = self._grid_step_pct()
+        self.grid_step_pct_val = step_frac
+        step_pct_value = compute_grid_step_pct(self.lower_price, self.upper_price, self.grid_levels_effective, self.grid_type)
         breakeven_pct = roundtrip_cost_pct(
             self.accounting.config.fee_bps or 0.0,
             self.accounting.config.spread_bps or 0.0,
             self.accounting.config.slippage_bps or 0.0,
         )
+        self.roundtrip_cost_bps_val = roundtrip_cost_bps(
+            self.accounting.config.fee_bps or 0.0,
+            self.accounting.config.spread_bps or 0.0,
+            self.accounting.config.slippage_bps or 0.0,
+        )
+        safety_factor = 1.2
         min_step_pct = breakeven_pct * safety_factor
-        breakeven_ok = bool(step_pct_value is not None and step_pct_value >= min_step_pct * 100)
+        breakeven_ok = bool(step_pct_value is not None and step_pct_value >= min_step_pct)
         if not breakeven_ok:
             self._edge_warned = True
             recommended_levels = recommend_grid_levels(self.lower_price, self.upper_price, self.grid_type, min_step_pct)
             logger.warning(
-                f"Grid step {step_pct_value or 0:.4f}% < min_step_pct {min_step_pct*100:.4f}% (breakeven {breakeven_pct*100:.4f}%). "
+                f"Grid step {step_pct_value or 0:.4f}% < min_step_pct {min_step_pct:.4f}% (breakeven {breakeven_pct:.4f}%). "
                 f"Ustaw grid_levels na {recommended_levels} (z {self.grid_levels}), zeby step >= min_step."
             )
             if self.risk_engine.config.fail_if_unprofitable_grid or self.risk_engine.config.fail_if_below_breakeven:
@@ -318,13 +312,10 @@ class GridBot:
     def _grid_step_bps(self, price: Optional[float]) -> Optional[float]:
         if price is None or price <= 0:
             return None
-        if self.grid_ratio:
-            profit_percent = self.grid_ratio - 1
-        elif self.grid_step is not None:
-            profit_percent = (self.grid_step) / price
-        else:
+        step_frac = self._grid_step_pct()
+        if step_frac is None:
             return None
-        return profit_percent * 10000
+        return step_frac * 10000
 
     def _guard_grid_edge(self, price: Optional[float]) -> None:
         if price is None:
@@ -333,38 +324,24 @@ class GridBot:
         if step_bps is None:
             return
         roundtrip_bps = self.compute_roundtrip_cost_bps()
-        threshold = roundtrip_bps * 1.25
-        if step_bps >= threshold:
+        if step_bps > roundtrip_bps:
             return
         target_levels: Optional[int] = None
-        if self.grid_ratio:
-            threshold_frac = threshold / 10000
-            if threshold_frac > 0:
-                max_levels = int(
-                    math.floor(math.log(self.upper_price / self.lower_price) / math.log(1 + threshold_frac))
-                )
-                if max_levels < 1:
-                    max_levels = 1
-                if max_levels < self.grid_levels:
-                    target_levels = max_levels
-        elif self.grid_step is not None and self.grid_step > 0:
-            threshold_frac = threshold / 10000
-            if threshold_frac > 0:
-                max_levels = int(math.floor((self.upper_price - self.lower_price) / (price * threshold_frac)))
-                if max_levels < 1:
-                    max_levels = 1
-                if max_levels < self.grid_levels:
-                    target_levels = max_levels
-        if target_levels is not None and target_levels < self.grid_levels:
+        threshold_pct = roundtrip_bps / 100  # convert bps to percent
+        if threshold_pct > 0:
+            max_levels = recommend_grid_levels(self.lower_price, self.upper_price, self.grid_type, threshold_pct)
+            if max_levels < self.grid_levels_effective:
+                target_levels = max_levels
+        if target_levels is not None and target_levels < self.grid_levels_effective:
             logger.warning(
                 f"Grid step {step_bps:.2f}bps below estimated roundtrip cost {roundtrip_bps:.2f}bps. "
-                f"Reducing grid_levels {self.grid_levels} -> {target_levels} to retain edge."
+                f"Reducing grid_levels requested={self.grid_levels} effective {self.grid_levels_effective}->{target_levels} to retain edge."
             )
-            self.grid_levels = target_levels
+            self.grid_levels_effective = target_levels
             self.calculator = GridCalculator(
                 lower_price=self.lower_price,
                 upper_price=self.upper_price,
-                grid_levels=self.grid_levels,
+                grid_levels=self.grid_levels_effective,
                 grid_type=self.grid_type,
             )
             self.grid_step = self.calculator.step
@@ -1009,18 +986,14 @@ class GridBot:
         if current_price is None:
             return
 
-        if self.grid_ratio:
-            profit_percent = (self.grid_ratio - 1)
-            logger.info(f"Siatka (geometric): krok ~{profit_percent*100:.4f}%")
-        else:
-            grid_range = float(self.upper_price) - float(self.lower_price)
-            profit_percent = (grid_range / self.grid_levels) / current_price
-            logger.info(f"Siatka: skok co {grid_range / self.grid_levels:.2f} (~{profit_percent*100:.4f}%)")
+        step_pct_val = compute_grid_step_pct(self.lower_price, self.upper_price, self.grid_levels_effective, self.grid_type)
+        profit_percent = step_pct_val if step_pct_val is not None else 0.0
+        logger.info(f"Siatka (geometric): krok ~{profit_percent:.4f}% (requested_levels={self.grid_levels}, effective_levels={self.grid_levels_effective})")
         roundtrip_bps = self.compute_roundtrip_cost_bps()
         logger.info(f"Szacowany koszt round-trip: {roundtrip_bps:.2f} bps")
-        if profit_percent < 0.002:
+        if profit_percent < 0.2:
             logger.warning("!" * 50)
-            logger.warning(f"CRITICAL WARNING: zysk na kratce to tylko {profit_percent*100:.4f}%!")
+            logger.warning(f"CRITICAL WARNING: zysk na kratce to tylko {profit_percent:.4f}%!")
             logger.warning("Gielda pobiera ok. 0.1% - 0.2% prowizji (entry + exit).")
             logger.warning("Sugerowane: zmniejsz liczbe grid_levels lub zwieksz zakres.")
             logger.warning("!" * 50)
@@ -1259,8 +1232,8 @@ class GridBot:
         slippage_bps_cfg = float(acct_cfg.get("slippage_bps", 0.0))
         roundtrip_cost_bps_val = roundtrip_cost_bps(fee_bps_cfg, spread_bps_cfg, slippage_bps_cfg)
         roundtrip_cost_pct_val = roundtrip_cost_pct(fee_bps_cfg, spread_bps_cfg, slippage_bps_cfg)
-        step_pct_fraction = grid_step_pct(self.lower_price, self.upper_price, self.grid_levels, self.grid_type)
-        grid_step_pct_val = step_pct_fraction * 100.0 if step_pct_fraction is not None else None
+        step_pct_fraction = grid_step_pct(self.lower_price, self.upper_price, self.grid_levels_effective, self.grid_type)
+        grid_step_pct_val = compute_grid_step_pct(self.lower_price, self.upper_price, self.grid_levels_effective, self.grid_type)
         self.grid_step_pct_val = step_pct_fraction
         self.roundtrip_cost_bps_val = roundtrip_cost_bps_val
         breakeven_ok = None
@@ -1268,9 +1241,7 @@ class GridBot:
         recommended_levels_val = None
         if grid_step_pct_val is not None:
             breakeven_ok = grid_step_pct_val >= (roundtrip_cost_pct_val * safety_factor)
-            recommended_levels_val = recommend_grid_levels(
-                self.lower_price, self.upper_price, self.grid_type, roundtrip_cost_pct_val * safety_factor * 100
-            )
+            recommended_levels_val = recommend_grid_levels(self.lower_price, self.upper_price, self.grid_type, roundtrip_cost_pct_val * safety_factor)
         pnl_gross = None
         if pnl_net is not None:
             pnl_gross = pnl_net + self.total_fees_quote
@@ -1313,6 +1284,7 @@ class GridBot:
                 "pnl_total": pnl_net,
                 "pnl_trading": pnl_trading,
                 "pnl_inventory_mtm": pnl_inventory_mtm,
+                "grid_levels_effective": self.grid_levels_effective,
                 "panic_triggered": getattr(self, "panic_triggered", False),
                 "panic_trigger_reason": getattr(self, "panic_trigger_reason", ""),
                 "panic_cooldown_steps": getattr(self, "panic_cooldown_steps_remaining", 0),
