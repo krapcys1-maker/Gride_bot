@@ -102,7 +102,7 @@ def download_data(
 
     with outfile.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["timestamp", "datetime", "open", "high", "low", "close", "volume"])
+        writer.writerow(["ts", "datetime", "open", "high", "low", "close", "volume"])
         for ts, o, h, l, c, v in rows:
             writer.writerow([ts, datetime.utcfromtimestamp(ts / 1000).isoformat(), o, h, l, c, v])
 
