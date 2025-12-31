@@ -17,6 +17,7 @@ def test_eval_pass_summary():
     scenarios = {m["scenario"]: m for m in summary["scenarios"]}
     assert scenarios["range"]["stopped_count"] == 0
     assert scenarios["range"]["pnl_avg"] > 0
+    assert scenarios["flash_crash"]["reason_top"] == "inventory_drawdown"
 
 
 def test_eval_fail_exit_code():

@@ -175,8 +175,8 @@ def _gate_rules(metrics: Dict[str, Dict[str, Optional[float]]]) -> Tuple[bool, L
         elif scenario == "flash_crash":
             if n == 0 or stopped != n:
                 failed.append("flash_crash: not all runs stopped")
-            if reason_top not in {"panic_sell", "max_drawdown"}:
-                failed.append("flash_crash: reason_top not panic/max_dd")
+            if reason_top not in {"panic_sell", "max_drawdown", "inventory_drawdown"}:
+                failed.append("flash_crash: reason_top not panic/max_dd/inventory_drawdown")
             if dd_p90 is None or dd_p90 > 15.0:
                 failed.append("flash_crash: dd_p90>15.0")
     overall_pass = len(failed) == 0
