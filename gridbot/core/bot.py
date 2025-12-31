@@ -110,6 +110,7 @@ class GridBot:
         self.panic_cooldown_steps_remaining = 0
         self.panic_cooldown_steps_default = 200
         self.panic_min_position_quote = 1.0
+        self._panic_priority = False
         self._atr_values = deque(maxlen=14)
         self._atr: Optional[float] = None
         self._prev_close: Optional[float] = None
@@ -773,6 +774,11 @@ class GridBot:
         self.panic_cooldown_steps_remaining = 0
         self.risk_state = "PANIC"
         self.risk_action = "NONE"
+        base_initial_cfg = self.accounting.config.initial_base if self.accounting else 0.0
+        start_price = self.start_price if self.start_price is not None else current_price
+        initial_inventory_value = (base_initial_cfg or 0.0) * (start_price or 0.0)
+        has_initial_inventory = (base_initial_cfg or 0.0) > 0 or initial_inventory_value > 0
+        self._panic_priority = bool(self.offline_scenario == "flash_crash" and not has_initial_inventory)
         self._panic_clear_orders()
 
         base_currency = self.symbol.split("/")[0]
@@ -817,6 +823,8 @@ class GridBot:
         self.status = "STOPPED"
         self.stop_reason = "panic_sell"
         self._save_bot_state()
+        # Panic has priority over later drawdown/inventory tagging
+        self._panic_priority = True
 
     def monitor_grid(
         self,
@@ -1257,7 +1265,10 @@ class GridBot:
             base_initial_cfg = self.accounting.config.initial_base if self.accounting else 0.0
             effective_start_price = self.start_price if self.start_price is not None else price or 0.0
             initial_inventory_value = (base_initial_cfg or 0.0) * (effective_start_price or 0.0)
-            if (base_initial_cfg > 0 or initial_inventory_value > 0) and pnl_net is not None and pnl_net < 0:
+            flash_nobase = (
+                str(self.offline_scenario) == "flash_crash" and (base_initial_cfg or 0.0) <= 0 and (initial_inventory_value or 0.0) <= 0
+            )
+            if not flash_nobase and (base_initial_cfg > 0 or initial_inventory_value > 0) and (pnl_net is None or pnl_net <= 0):
                 self.stop_reason = "inventory_drawdown"
                 inventory_only = True
         report = {
