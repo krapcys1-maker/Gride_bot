@@ -1,0 +1,25 @@
+accounting:
+  enabled: true
+  fee_rate: 0.001
+  initial_base: 0.0
+  initial_base_value_pct: 0.5
+  initial_inventory_mode: value_neutral
+  initial_usdt: 1000.0
+  slippage_bps: 0.0
+dry_run: true
+grid_levels: 10
+grid_type: geometric
+lower_price: 86000
+order_size: 0.001
+risk:
+  enabled: true
+  max_consecutive_errors: 3
+  max_drawdown_pct: 10.0
+  max_price_jump_pct: 2.0
+  panic_on_stop: true
+  pause_seconds: 1
+stop_loss_enabled: true
+strategy_id: classic_grid
+symbol: BTC/USDT
+trailing_up: false
+upper_price: 90000

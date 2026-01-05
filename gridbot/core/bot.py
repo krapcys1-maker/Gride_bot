@@ -72,8 +72,12 @@ class GridBot:
         self.order_size = float(self.config["order_size"])
         self.grid_levels = int(self.config["grid_levels"])
         self.grid_levels_effective = self.grid_levels
-        self.lower_price = float(self.config["lower_price"])
-        self.upper_price = float(self.config["upper_price"])
+        self.lower_price = self._coerce_price(self.config.get("lower_price"))
+        self.upper_price = self._coerce_price(self.config.get("upper_price"))
+        self.csv_range_padding_pct = float(self.config.get("csv_range_padding_pct", 0.5))
+        self.range_source: str = "config"
+        self.raw_low: Optional[float] = None
+        self.raw_high: Optional[float] = None
         self.grid_type = str(self.config.get("grid_type", "arithmetic"))
         self.trailing_up = bool(self.config["trailing_up"])
         self.stop_loss_enabled = bool(self.config["stop_loss_enabled"])
@@ -82,6 +86,8 @@ class GridBot:
         self.stop_reason: str = ""
         self.last_price: Optional[float] = None
         self.start_price: Optional[float] = None
+        self.start_outside_range: bool = False
+        self._offline_prices: List[Candle] = []
         self.risk_state: str = "NORMAL"
         self.risk_action: str = "NONE"
         self.status_every_seconds = max(status_every_seconds, 0.0)
@@ -148,6 +154,9 @@ class GridBot:
         self._init_db()
 
         self._load_bot_state()
+        self._apply_csv_auto_range_if_needed()
+        if self.lower_price is None or self.upper_price is None:
+            raise ValueError("lower_price/upper_price must be set (config or CSV auto-range)")
 
         self.calculator = GridCalculator(
             lower_price=self.lower_price,
@@ -193,7 +202,7 @@ class GridBot:
                 f"COSTS fee_bps={self.accounting.config.fee_bps}, spread_bps={self.accounting.config.spread_bps}, slippage_bps={self.accounting.config.slippage_bps}"
             )
             initial_price = self.fetch_current_price()
-            self.start_price = initial_price
+            self._record_start_price(initial_price)
             if (
                 self.accounting.config.initial_inventory_mode == "value_neutral"
                 and initial_price is not None
@@ -213,11 +222,24 @@ class GridBot:
                 self.risk_engine.peak_equity = self.initial_equity
         self._warn_cost_sanity()
 
+    def _coerce_price(self, value: Any) -> Optional[float]:
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
     def reset_state(self) -> None:
         """Clear persisted state and revert prices to config defaults."""
         self.storage.reset_state()
-        self.lower_price = float(self.config["lower_price"])
-        self.upper_price = float(self.config["upper_price"])
+        self.range_source = "config"
+        self.raw_low = None
+        self.raw_high = None
+        self.start_outside_range = False
+        self.lower_price = self._coerce_price(self.config.get("lower_price"))
+        self.upper_price = self._coerce_price(self.config.get("upper_price"))
+        self._apply_csv_auto_range_if_needed()
+        if self.lower_price is None or self.upper_price is None:
+            raise ValueError("lower_price/upper_price must be set (config or CSV auto-range)")
         self.status = "RUNNING"
         self.stop_reason = ""
         self.calculator = GridCalculator(
@@ -431,6 +453,37 @@ class GridBot:
                         feed.append(Candle.from_price(parsed))
         return feed
 
+    def _apply_csv_auto_range_if_needed(self) -> None:
+        if str(self.offline_scenario) != "from_csv_ohlc":
+            return
+        prices = getattr(self, "_offline_prices", []) or []
+        if prices:
+            try:
+                low_val: Optional[float] = None
+                high_val: Optional[float] = None
+                for candle in prices:
+                    if candle is None:
+                        continue
+                    low_val = candle.low if low_val is None else min(low_val, candle.low)
+                    high_val = candle.high if high_val is None else max(high_val, candle.high)
+                self.raw_low = low_val
+                self.raw_high = high_val
+            except Exception:
+                self.raw_low = None
+                self.raw_high = None
+        lower_provided = self.lower_price is not None
+        upper_provided = self.upper_price is not None
+        if lower_provided and upper_provided:
+            self.range_source = "config"
+            return
+        if self.raw_low is None or self.raw_high is None:
+            logger.warning("CSV auto-range requested but CSV data is empty; using configured bounds if available.")
+            return
+        padding_pct = max(0.0, float(self.csv_range_padding_pct))
+        self.lower_price = self.raw_low * (1 - padding_pct / 100.0)
+        self.upper_price = self.raw_high * (1 + padding_pct / 100.0)
+        self.range_source = "csv_auto"
+
     def _load_offline_csv(self, path: Path) -> List[Candle]:
         import csv
 
@@ -508,6 +561,7 @@ class GridBot:
             prices = self._generate_offline_scenario(self.offline_scenario)
         if not prices:
             prices = self._load_offline_prices()
+        self._offline_prices = prices
         self._offline_feed_warned = False
         if prices:
             if self.offline_once:
@@ -970,6 +1024,27 @@ class GridBot:
             logger.error(f"Blad podczas pobierania tickera: {exc}")
             return None
 
+    def _record_start_price(self, price: Optional[Any]) -> None:
+        if price is None:
+            return
+        numeric_price: Optional[float]
+        if isinstance(price, Candle):
+            numeric_price = float(price.close)
+        else:
+            try:
+                numeric_price = float(price)
+            except (TypeError, ValueError):
+                return
+        if self.start_price is None:
+            self.start_price = numeric_price
+        reference_price = self.start_price if self.start_price is not None else numeric_price
+        if self.lower_price is None or self.upper_price is None:
+            return
+        if reference_price < self.lower_price or reference_price > self.upper_price:
+            if not self.start_outside_range:
+                logger.warning("Start price outside grid range")
+            self.start_outside_range = True
+
     def _price_below_lower(self, price: Any) -> bool:
         if isinstance(price, Candle):
             return price.low < self.lower_price
@@ -1020,6 +1095,7 @@ class GridBot:
                 logger.error(f"Unable to fetch balance: {exc}")
 
         initial_price = self.fetch_current_price()
+        self._record_start_price(initial_price)
         self.risk_check(initial_price)
         self._warn_cost_sanity()
         if self._cost_guard_failed:
@@ -1293,6 +1369,13 @@ class GridBot:
                 "base_initial": self.accounting.config.initial_base if self.accounting else None,
                 "quote_initial": self.accounting.config.initial_usdt if self.accounting else None,
                 "start_price": self.start_price,
+                "start_outside_range": getattr(self, "start_outside_range", False),
+                "lower_price_used": self.lower_price,
+                "upper_price_used": self.upper_price,
+                "range_source": getattr(self, "range_source", "config"),
+                "raw_low": self.raw_low,
+                "raw_high": self.raw_high,
+                "csv_range_padding_pct": getattr(self, "csv_range_padding_pct", None),
                 "pnl_total": pnl_net,
                 "pnl_trading": pnl_trading,
                 "pnl_inventory_mtm": pnl_inventory_mtm,

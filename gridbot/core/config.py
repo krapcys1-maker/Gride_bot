@@ -37,18 +37,25 @@ def load_config(path: Path = CONFIG_FILE) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("config.yaml must contain a mapping at the root level")
 
-    required = {"symbol", "lower_price", "upper_price", "grid_levels", "order_size"}
+    required = {"symbol", "grid_levels", "order_size"}
     missing = required.difference(data)
     if missing:
         raise ValueError(f"config.yaml missing required keys: {', '.join(sorted(missing))}")
 
-    data["lower_price"] = float(data["lower_price"])
-    data["upper_price"] = float(data["upper_price"])
+    def _maybe_float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    data["lower_price"] = _maybe_float(data.get("lower_price"))
+    data["upper_price"] = _maybe_float(data.get("upper_price"))
     data["grid_levels"] = int(data["grid_levels"])
     data["order_size"] = float(data["order_size"])
     data["trailing_up"] = bool(data.get("trailing_up", False))
     data["stop_loss_enabled"] = bool(data.get("stop_loss_enabled", True))
     data["grid_type"] = str(data.get("grid_type", "arithmetic")).lower()
+    data["csv_range_padding_pct"] = float(data.get("csv_range_padding_pct", 0.5))
     risk_cfg = data.get("risk", {})
     data["risk"] = {
         "enabled": bool(risk_cfg.get("enabled", True)),
