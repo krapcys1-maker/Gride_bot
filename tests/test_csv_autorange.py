@@ -84,3 +84,15 @@ def test_from_csv_ohlc_reports_start_outside_range(tmp_path):
     assert metrics["upper_price_used"] == pytest.approx(20.0)
     assert metrics.get("start_outside_range") is True
     assert metrics.get("inventory_only") is False
+
+
+def test_from_csv_ohlc_autorange_uses_fixture_without_bounds(tmp_path):
+    cfg_path = Path("tests/fixtures/config_costs_neutral_mix70_nobase_autorange.yaml")
+    report_path = tmp_path / "report_fixture.json"
+    report = _run_bot(cfg_path, report_path, tmp_path / "bot3.db")
+    metrics = report["metrics"]
+    assert metrics["range_source"] == "csv_auto"
+    assert metrics["raw_low"] == pytest.approx(90.0)
+    assert metrics["raw_high"] == pytest.approx(190.0)
+    assert metrics["lower_price_used"] == pytest.approx(90.0 * 0.995)
+    assert metrics["upper_price_used"] == pytest.approx(190.0 * 1.005)

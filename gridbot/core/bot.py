@@ -124,6 +124,11 @@ class GridBot:
         self._maker_rng = random.Random(seed if seed is not None else 0)
         self.execution_cfg = self.config.get("execution", {}) if isinstance(self.config.get("execution", {}), dict) else {}
         self.panic_on_range_break = bool(self.execution_cfg.get("panic_on_range_break", True))
+        self.first_skip_side: Optional[str] = None
+        self.first_skip_price: Optional[float] = None
+        self.first_skip_step: Optional[int] = None
+        self.first_skip_base_free: Optional[float] = None
+        self.first_skip_quote_free: Optional[float] = None
 
         risk_cfg = self.config.get("risk", {})
         self.risk_engine = RiskEngine(
@@ -935,6 +940,7 @@ class GridBot:
                     order["side"], execution_price, filled_amount, fee_rate=fee_rate
                 )
                 if not ok:
+                    self._record_first_skip(order["side"], execution_price)
                     try:
                         self.storage.delete_active_order(order["id"])
                         updated_orders.remove(order)
@@ -1044,6 +1050,27 @@ class GridBot:
             if not self.start_outside_range:
                 logger.warning("Start price outside grid range")
             self.start_outside_range = True
+
+    def _record_first_skip(self, side: str, price: float) -> None:
+        """Capture details of the first accounting skip for offline runs."""
+        if not self.offline:
+            return
+        if self.first_skip_side is not None:
+            return
+        self.first_skip_side = str(side).lower()
+        try:
+            self.first_skip_price = float(price)
+        except Exception:
+            self.first_skip_price = None
+        self.first_skip_step = self.steps_executed
+        if self.accounting:
+            self.first_skip_base_free = float(self.accounting.base_qty)
+            self.first_skip_quote_free = float(self.accounting.quote_qty)
+        logger.warning(
+            f"Accounting skip ({self.first_skip_side}) at price={self.first_skip_price}, "
+            f"order_size={self.order_size}, base_free={self.first_skip_base_free}, quote_free={self.first_skip_quote_free}, "
+            f"step={self.first_skip_step}"
+        )
 
     def _price_below_lower(self, price: Any) -> bool:
         if isinstance(price, Candle):
@@ -1376,6 +1403,7 @@ class GridBot:
                 "raw_low": self.raw_low,
                 "raw_high": self.raw_high,
                 "csv_range_padding_pct": getattr(self, "csv_range_padding_pct", None),
+                "order_size": self.order_size,
                 "pnl_total": pnl_net,
                 "pnl_trading": pnl_trading,
                 "pnl_inventory_mtm": pnl_inventory_mtm,
@@ -1402,6 +1430,13 @@ class GridBot:
                 "taker_fills": self.taker_fills,
                 "maker_ratio": maker_ratio,
                 "avg_fee_per_trade": avg_fee,
+                "skipped_sell_no_base": self.accounting.skipped_sell_no_base if self.accounting else None,
+                "skipped_buy_no_quote": self.accounting.skipped_buy_no_quote if self.accounting else None,
+                "first_skip_step": self.first_skip_step,
+                "first_skip_side": self.first_skip_side,
+                "first_skip_price": self.first_skip_price,
+                "first_skip_base_free": self.first_skip_base_free,
+                "first_skip_quote_free": self.first_skip_quote_free,
                 # legacy keys for compatibility
                 "total_fees": self.total_fees_quote,
                 "total_slippage": self.slippage_cost_est_quote,

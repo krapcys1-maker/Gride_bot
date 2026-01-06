@@ -1,0 +1,22 @@
+accounting:
+  apply_costs_in_price: true
+  enabled: true
+  fee_bps: 0.0
+  initial_base: 0.0
+  initial_usdt: 10.0
+  slippage_bps: 0.0
+  spread_bps: 0.0
+dry_run: true
+grid_levels: 3
+grid_type: arithmetic
+lower_price: 90
+offline: true
+offline_prices:
+- 100
+- 90
+order_size: 1.0
+stop_loss_enabled: true
+strategy_id: classic_grid
+symbol: BTC/USDT
+trailing_up: false
+upper_price: 110
