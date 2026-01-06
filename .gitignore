@@ -42,3 +42,9 @@ flash_crash_*.csv
 # local OHLC exports
 ohlc_*.csv
 
+
+# local scratch
+tmp_skip*/
+tmp_cfg.yaml
+tmp_report.json
+
