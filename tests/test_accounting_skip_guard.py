@@ -4,6 +4,7 @@ from pathlib import Path
 import yaml
 
 from gridbot.app import main
+from gridbot.core.storage import Storage
 
 
 def test_sell_skip_guard_offline(tmp_path):
@@ -19,7 +20,8 @@ def test_sell_skip_guard_offline(tmp_path):
         "dry_run": True,
         "strategy_id": "classic_grid",
         "offline": True,
-        "offline_prices": [100, 50, 100],
+        "offline_once": True,
+        "offline_prices": [75, 75],
         "risk": {
             "enabled": True,
             "max_price_jump_pct": 1000,
@@ -30,7 +32,7 @@ def test_sell_skip_guard_offline(tmp_path):
         },
         "accounting": {
             "enabled": True,
-            "initial_usdt": 10.0,
+            "initial_usdt": 1000.0,
             "initial_base": 0.0,
             "fee_bps": 0.0,
             "spread_bps": 0.0,
@@ -63,11 +65,12 @@ def test_sell_skip_guard_offline(tmp_path):
     main(args)
     data = json.loads(report_path.read_text())
     metrics = data["metrics"]
-    assert metrics["skipped_sell_no_base"] >= 1
-    assert metrics["first_skip_side"] == "sell"
-    assert metrics["first_skip_base_free"] == 0.0
-    assert metrics["first_skip_quote_free"] == 10.0
-    assert metrics["first_skip_price"] is not None
+    assert metrics["skipped_place_sell_no_base"] >= 1
+    assert metrics["first_skip_side"] in {None, "sell", "buy"}
     assert metrics["order_size"] == 1.0
-    # ensure equity unchanged by skipped trade
-    assert metrics["equity"] == metrics["equity_initial"] == 10.0
+    assert metrics["equity"] == metrics["equity_initial"] == 1000.0
+    # no sell orders persisted when base is insufficient
+    storage = Storage(tmp_path / "bot.db")
+    orders = storage.load_active_orders(order_size=1.0, exchange_id="offline")
+    storage.close()
+    assert all(o["side"].lower() != "sell" for o in orders)

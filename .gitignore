@@ -48,3 +48,7 @@ tmp_skip*/
 tmp_cfg.yaml
 tmp_report.json
 
+
+# local scratch
+tmp_test_guard/
+

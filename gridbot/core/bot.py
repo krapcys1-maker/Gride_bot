@@ -129,6 +129,8 @@ class GridBot:
         self.first_skip_step: Optional[int] = None
         self.first_skip_base_free: Optional[float] = None
         self.first_skip_quote_free: Optional[float] = None
+        self.skipped_place_sell_no_base = 0
+        self.skipped_place_buy_no_quote = 0
 
         risk_cfg = self.config.get("risk", {})
         self.risk_engine = RiskEngine(
@@ -240,6 +242,8 @@ class GridBot:
         self.raw_low = None
         self.raw_high = None
         self.start_outside_range = False
+        self.skipped_place_sell_no_base = 0
+        self.skipped_place_buy_no_quote = 0
         self.lower_price = self._coerce_price(self.config.get("lower_price"))
         self.upper_price = self._coerce_price(self.config.get("upper_price"))
         self._apply_csv_auto_range_if_needed()
@@ -625,6 +629,8 @@ class GridBot:
 
     def create_limit_order(self, side: str, price: float, amount: float) -> Optional[Dict[str, Any]]:
         """Place a limit order (real or simulated) and return stored representation."""
+        if not self._can_place_order(side, price, amount):
+            return None
         now_ts = datetime.utcnow().isoformat()
         exchange_id = getattr(self.exchange, "id", "exchange")
 
@@ -1098,6 +1104,39 @@ class GridBot:
             f"step={self.first_skip_step}"
         )
 
+    def _can_place_order(self, side: str, price: Any, amount: float) -> bool:
+        if not self.accounting or not getattr(self.accounting.config, "enabled", True):
+            return True
+        side_l = str(side).lower()
+        try:
+            px = float(price)
+        except Exception:
+            px = 0.0
+        if side_l == "sell":
+            if (self.accounting.base_qty + 1e-12) < amount:
+                self.skipped_place_sell_no_base += 1
+                return False
+            return True
+        trade_value = px * amount
+        fee_rate = self._effective_fee_rate(maker=False)
+        fee_value = trade_value * fee_rate
+        total_cost = trade_value + fee_value
+        if not self.costs_in_price:
+            slip_cost = 0.0
+            spread_cost = 0.0
+            if self.execution_model:
+                slip_cost, spread_cost = self.execution_model.cost_estimates(amount, px)
+            else:
+                spread_bps = getattr(self.accounting.config, "spread_bps", 0.0) or 0.0
+                slippage_bps = getattr(self.accounting.config, "slippage_bps", 0.0) or 0.0
+                slip_cost = amount * px * (slippage_bps / 10000.0)
+                spread_cost = amount * px * ((spread_bps / 2.0) / 10000.0)
+            total_cost += slip_cost + spread_cost
+        if (self.accounting.quote_qty + 1e-12) < total_cost:
+            self.skipped_place_buy_no_quote += 1
+            return False
+        return True
+
     def _price_below_lower(self, price: Any) -> bool:
         if isinstance(price, Candle):
             return price.low < self.lower_price
@@ -1463,6 +1502,8 @@ class GridBot:
                 "first_skip_price": self.first_skip_price,
                 "first_skip_base_free": self.first_skip_base_free,
                 "first_skip_quote_free": self.first_skip_quote_free,
+                "skipped_place_sell_no_base": self.skipped_place_sell_no_base,
+                "skipped_place_buy_no_quote": self.skipped_place_buy_no_quote,
                 # legacy keys for compatibility
                 "total_fees": self.total_fees_quote,
                 "total_slippage": self.slippage_cost_est_quote,
