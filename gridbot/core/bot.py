@@ -936,6 +936,32 @@ class GridBot:
                 trade_data["value"] = trade_value
                 fee_rate = self._effective_fee_rate(maker=is_maker)
                 fee_value = trade_value * fee_rate
+                # Guard insufficient balances before attempting fill
+                if order["side"].lower() == "sell":
+                    if (self.accounting.base_qty + 1e-12) < filled_amount:
+                        self.accounting.skipped_sell_no_base += 1
+                        self._record_first_skip("sell", execution_price)
+                        try:
+                            self.storage.delete_active_order(order["id"])
+                            updated_orders.remove(order)
+                        except Exception as exc:  # pragma: no cover
+                            logger.warning(f"Nie udalo sie usunac zlecenia po odrzuceniu fillu {order['id']}: {exc}")
+                        modified = True
+                        continue
+                else:
+                    total_cost = trade_value + fee_value
+                    if not self.costs_in_price:
+                        total_cost += slip_cost + spread_cost
+                    if (self.accounting.quote_qty + 1e-12) < total_cost:
+                        self.accounting.skipped_buy_no_quote += 1
+                        self._record_first_skip("buy", execution_price)
+                        try:
+                            self.storage.delete_active_order(order["id"])
+                            updated_orders.remove(order)
+                        except Exception as exc:  # pragma: no cover
+                            logger.warning(f"Nie udalo sie usunac zlecenia po odrzuceniu fillu {order['id']}: {exc}")
+                        modified = True
+                        continue
                 ok, _, equity_after = self.accounting.on_fill(
                     order["side"], execution_price, filled_amount, fee_rate=fee_rate
                 )
