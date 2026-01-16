@@ -2,12 +2,21 @@ import argparse
 import csv
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
 from gridbot.app import main
+from gridbot.core.costs import compute_grid_step_pct, recommend_grid_levels
+
+
+COST_PRESETS: Dict[str, Dict[str, float]] = {
+    "baseline": {"spread_bps": 20.0, "slippage_bps": 30.0, "maker_fee_bps": 2.0, "taker_fee_bps": 8.0},
+    "medium": {"spread_bps": 10.0, "slippage_bps": 10.0, "maker_fee_bps": 1.0, "taker_fee_bps": 4.0},
+    "ultra": {"spread_bps": 5.0, "slippage_bps": 5.0, "maker_fee_bps": 1.0, "taker_fee_bps": 2.0},
+}
 
 
 def parse_list(value: Optional[str], split_on_space: bool = False) -> List[str]:
@@ -64,6 +73,91 @@ def apply_overrides(config: dict, overrides: List[str]) -> dict:
                     cursor[part] = {}
                 cursor = cursor[part]
     return config
+
+
+def apply_cost_preset(config: dict, preset: Optional[str]) -> bool:
+    """Apply named cost preset to accounting config."""
+    if not preset:
+        return False
+    name = str(preset).lower()
+    if name not in COST_PRESETS:
+        raise ValueError(f"Unknown cost preset: {preset}")
+    preset_vals = COST_PRESETS[name]
+    acct_cfg = config.get("accounting", {})
+    if not isinstance(acct_cfg, dict):
+        acct_cfg = {}
+    changed = False
+    for key, val in preset_vals.items():
+        if acct_cfg.get(key) != val:
+            changed = True
+        acct_cfg[key] = val
+    config["accounting"] = acct_cfg
+    return changed
+
+
+def _coerce_float(value: Optional[object]) -> Optional[float]:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _csv_low_high(path: Path) -> Tuple[float, float]:
+    """Return raw low/high from OHLC CSV."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Offline CSV not found: {path}")
+    low_val: Optional[float] = None
+    high_val: Optional[float] = None
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValueError("Offline CSV must include headers")
+        headers = {h.lower() for h in reader.fieldnames}
+        if not {"low", "high"}.issubset(headers):
+            raise ValueError("Offline CSV must contain columns: low, high (plus open/close)")
+        for row in reader:
+            row_lower = {k.lower(): v for k, v in row.items()}
+            try:
+                low = float(row_lower.get("low"))
+                high = float(row_lower.get("high"))
+            except (TypeError, ValueError):
+                continue
+            low_val = low if low_val is None else min(low_val, low)
+            high_val = high if high_val is None else max(high_val, high)
+    if low_val is None or high_val is None:
+        raise ValueError("Offline CSV low/high are empty after parsing")
+    return low_val, high_val
+
+
+def auto_grid_levels_from_bounds(config: dict, offline_csv: Optional[str], min_step_pct: float) -> Tuple[int, float, float, float, float, float]:
+    """
+    Determine grid_levels to satisfy min_step_pct.
+
+    Returns (grid_levels, grid_step_pct, padded_lower, padded_upper, raw_low, raw_high).
+    """
+    lower_price = _coerce_float(config.get("lower_price"))
+    upper_price = _coerce_float(config.get("upper_price"))
+    raw_low = None
+    raw_high = None
+    padding_pct = float(config.get("csv_range_padding_pct", 0.5) or 0.0)
+    if lower_price is None or upper_price is None:
+        if not offline_csv:
+            raise ValueError("auto-grid requires lower/upper prices or --offline-csv for CSV auto-range")
+        raw_low, raw_high = _csv_low_high(Path(offline_csv))
+        lower_price = raw_low * (1 - padding_pct / 100.0)
+        upper_price = raw_high * (1 + padding_pct / 100.0)
+    if lower_price is None or upper_price is None:
+        raise ValueError("Unable to determine price bounds for auto grid search")
+    if upper_price <= lower_price:
+        raise ValueError(f"Invalid price bounds lower={lower_price} upper={upper_price}")
+    grid_type = str(config.get("grid_type", "arithmetic"))
+    min_step_pct = float(min_step_pct)
+    if min_step_pct <= 0:
+        raise ValueError("min_step_pct must be positive for auto grid search")
+    levels = recommend_grid_levels(lower_price, upper_price, grid_type, min_step_pct, strict=True)
+    step_pct = compute_grid_step_pct(lower_price, upper_price, levels, grid_type) or 0.0
+    return levels, step_pct, lower_price, upper_price, raw_low, raw_high
 
 def stub_report(run_id: str, strategy_id: str, scenario: str, seed: int, reason: str, error_type: str = "") -> dict:
     return {
@@ -198,6 +292,8 @@ def run_once(
         "recommended_grid_levels": metrics.get("recommended_grid_levels"),
         "skipped_sell_no_base": report.get("accounting_skips", {}).get("skipped_sell_no_base"),
         "skipped_buy_no_quote": report.get("accounting_skips", {}).get("skipped_buy_no_quote"),
+        "skipped_place_sell_no_base": metrics.get("skipped_place_sell_no_base"),
+        "skipped_place_buy_no_quote": metrics.get("skipped_place_buy_no_quote"),
         "first_skip_step": metrics.get("first_skip_step"),
         "first_skip_side": metrics.get("first_skip_side"),
         "first_skip_price": metrics.get("first_skip_price"),
@@ -225,6 +321,22 @@ def main_cli(argv=None) -> None:
     parser.add_argument("--steps", type=int, default=500, help="Max steps per run")
     parser.add_argument("--config", default="tests/fixtures/config_small.yaml", help="Path to config file")
     parser.add_argument("--offline-csv", help="Path to CSV with OHLC for from_csv_ohlc scenario")
+    parser.add_argument(
+        "--csv-range-padding-pct",
+        type=float,
+        help="Override csv_range_padding_pct when deriving bounds from CSV (from_csv_ohlc)",
+    )
+    parser.add_argument(
+        "--auto-grid-levels",
+        action="store_true",
+        help="Auto-pick grid_levels so grid_step_pct >= min_step_pct using CSV bounds/padding",
+    )
+    parser.add_argument("--min-step-pct", type=float, help="Minimum grid step percent used by --auto-grid-levels")
+    parser.add_argument(
+        "--cost-preset",
+        choices=sorted(COST_PRESETS.keys()),
+        help="Preset for accounting costs (spread/slippage/maker/taker)",
+    )
     parser.add_argument("--interval", type=float, default=0.0, help="Interval between ticks")
     parser.add_argument("--log-level", default="WARNING", help="Log level for sub-runs")
     parser.add_argument("--parallel", type=int, default=1, help="Parallel workers (>=1, currently sequential)")
@@ -246,24 +358,107 @@ def main_cli(argv=None) -> None:
     for path in [db_dir, reports_dir]:
         path.mkdir(parents=True, exist_ok=True)
 
+    if args.auto_grid_levels and args.grid_levels:
+        raise SystemExit("Cannot combine --auto-grid-levels with manual --grid-levels sweep")
+
+    # Check for conflicting csv_range_padding_pct sources
+    if args.csv_range_padding_pct is not None and args.set:
+        for override in args.set:
+            if override.startswith("csv_range_padding_pct="):
+                raise SystemExit(
+                    "Cannot use both --csv-range-padding-pct flag and --set csv_range_padding_pct=... "
+                    "Use one or the other to avoid ambiguity."
+                )
+
     config_path = Path(args.config)
+    try:
+        cfg_data = yaml.safe_load(config_path.read_text())
+    except Exception as exc:  # pragma: no cover
+        raise SystemExit(f"Failed to read config: {exc}")
+    if not isinstance(cfg_data, dict):
+        raise SystemExit("Config file must contain a mapping at the root")
+
+    cfg_modified = False
+    try:
+        preset_applied = apply_cost_preset(cfg_data, args.cost_preset)
+        cfg_modified = cfg_modified or preset_applied
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    if args.csv_range_padding_pct is not None:
+        cfg_data["csv_range_padding_pct"] = float(args.csv_range_padding_pct)
+        cfg_modified = True
     if args.set:
         try:
-            cfg_data = yaml.safe_load(config_path.read_text())
-            if isinstance(cfg_data, dict):
-                cfg_data = apply_overrides(cfg_data, args.set)
-                cfg_text = yaml.safe_dump(cfg_data)
-                config_path = out_dir / "applied_config.yaml"
-                config_path.parent.mkdir(parents=True, exist_ok=True)
-                config_path.write_text(cfg_text)
+            cfg_data = apply_overrides(cfg_data, args.set)
+            cfg_modified = True
         except Exception as exc:  # pragma: no cover
             raise SystemExit(f"Failed to apply overrides: {exc}")
+    auto_grid = None
+    auto_grid_step_pct = None
+    auto_bounds: Optional[Tuple[float, float]] = None
+    auto_raw_bounds: Optional[Tuple[float, float]] = None
+    if args.auto_grid_levels:
+        if args.min_step_pct is None:
+            raise SystemExit("--min-step-pct is required with --auto-grid-levels")
+        offline_csv_path = args.offline_csv or cfg_data.get("offline_csv")
+        try:
+            auto_grid, auto_grid_step_pct, padded_lower, padded_upper, raw_low, raw_high = auto_grid_levels_from_bounds(
+                cfg_data, offline_csv_path, args.min_step_pct
+            )
+            auto_bounds = (padded_lower, padded_upper)
+            if raw_low is not None and raw_high is not None:
+                auto_raw_bounds = (raw_low, raw_high)
+        except Exception as exc:
+            raise SystemExit(f"Failed to auto-tune grid_levels: {exc}")
+        cfg_data["grid_levels"] = auto_grid
+        cfg_modified = True
+        step_str = f"{auto_grid_step_pct:.4f}" if auto_grid_step_pct is not None else "unknown"
+        range_str = ""
+        if auto_bounds:
+            range_str = f" range=[{auto_bounds[0]:.4f}, {auto_bounds[1]:.4f}]"
+        if auto_raw_bounds:
+            range_str += f" raw=[{auto_raw_bounds[0]:.4f}, {auto_raw_bounds[1]:.4f}]"
+        print(
+            f"Auto-selected grid_levels={auto_grid} (min_step_pct={args.min_step_pct}, step_pct~{step_str}{range_str})"
+        )
+
+    if cfg_modified:
+        # Add batch_run metadata for audit trail
+        cfg_data["_batch_run_meta"] = {
+            "cost_preset_used": args.cost_preset,
+            "auto_grid_levels_used": args.auto_grid_levels,
+            "min_step_pct": args.min_step_pct,
+            "auto_grid_step_pct": auto_grid_step_pct,
+            "csv_range_padding_pct_flag": args.csv_range_padding_pct,
+            "set_overrides": args.set if args.set else [],
+            "config_source": str(Path(args.config).resolve()),
+            "timestamp": datetime.now().isoformat(),
+        }
+        if auto_bounds:
+            cfg_data["_batch_run_meta"]["auto_bounds"] = {
+                "lower": auto_bounds[0],
+                "upper": auto_bounds[1],
+            }
+        if auto_raw_bounds:
+            cfg_data["_batch_run_meta"]["auto_raw_bounds"] = {
+                "lower": auto_raw_bounds[0],
+                "upper": auto_raw_bounds[1],
+            }
+        cfg_text = yaml.safe_dump(cfg_data, sort_keys=False)
+        config_path = out_dir / "applied_config.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(cfg_text)
+
     strategy_ids = parse_list(args.strategy_ids)
     scenarios = parse_list(args.scenarios)
     seeds = [int(s) for s in parse_list(args.seeds)]
 
-    grid_levels_list = parse_list(args.grid_levels) if args.grid_levels else []
-    grid_levels_values = [int(gl) for gl in grid_levels_list] if grid_levels_list else [None]
+    grid_levels_values: List[Optional[int]]
+    if auto_grid is not None:
+        grid_levels_values = [int(auto_grid)]
+    else:
+        grid_levels_list = parse_list(args.grid_levels) if args.grid_levels else []
+        grid_levels_values = [int(gl) for gl in grid_levels_list] if grid_levels_list else [None]
 
     total_runs = len(strategy_ids) * len(scenarios) * len(seeds) * len(grid_levels_values)
     print(
@@ -292,6 +487,10 @@ def main_cli(argv=None) -> None:
                         args.offline_csv,
                         grid_levels=grid_levels,
                     )
+                    # Add batch_run audit fields
+                    res["cost_preset_used"] = args.cost_preset
+                    res["auto_grid_levels_used"] = args.auto_grid_levels
+                    res["min_step_pct_used"] = args.min_step_pct
                     results.append(res)
                     if args.fail_fast and res.get("status") == "ERROR":
                         break
@@ -335,6 +534,8 @@ def main_cli(argv=None) -> None:
         "recommended_grid_levels",
         "skipped_sell_no_base",
         "skipped_buy_no_quote",
+        "skipped_place_sell_no_base",
+        "skipped_place_buy_no_quote",
         "first_skip_step",
         "first_skip_side",
         "first_skip_price",
@@ -345,6 +546,9 @@ def main_cli(argv=None) -> None:
         "report_path",
         "grid_levels_used",
         "grid_levels_effective",
+        "cost_preset_used",
+        "auto_grid_levels_used",
+        "min_step_pct_used",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

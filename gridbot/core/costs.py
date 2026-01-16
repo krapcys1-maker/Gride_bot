@@ -33,23 +33,54 @@ def compute_grid_step_pct(lower_price: float, upper_price: float, grid_levels: i
     return frac * 100 if frac is not None else None
 
 
-def recommend_grid_levels(lower_price: float, upper_price: float, grid_type: str, min_step_pct: float) -> int:
-    """Return maximum grid_levels satisfying min_step_pct (percent)."""
+def recommend_grid_levels(
+    lower_price: float,
+    upper_price: float,
+    grid_type: str,
+    min_step_pct: float,
+    strict: bool = False,
+) -> int:
+    """Return maximum grid_levels satisfying min_step_pct (percent).
+
+    Args:
+        lower_price: Lower bound of grid range.
+        upper_price: Upper bound of grid range.
+        grid_type: "geometric" or "arithmetic".
+        min_step_pct: Minimum required step percent.
+        strict: If True, raise ValueError when constraint cannot be satisfied.
+
+    Returns:
+        Number of grid levels (minimum 2).
+
+    Raises:
+        ValueError: If strict=True and min_step_pct cannot be satisfied.
+    """
     min_step_frac = min_step_pct / 100.0
     if min_step_frac <= 0:
         return 2
     grid_type = str(grid_type or "").lower()
     if grid_type == "geometric":
         levels = 1 + int(math.floor(math.log(upper_price / lower_price) / math.log(1 + min_step_frac)))
-        return max(levels, 2)
-    mid_price = (upper_price + lower_price) / 2
-    if mid_price <= 0:
-        return 2
-    step_abs_needed = mid_price * min_step_frac
-    if step_abs_needed <= 0:
-        return 2
-    levels = 1 + int(math.floor((upper_price - lower_price) / step_abs_needed))
-    return max(levels, 2)
+        levels = max(levels, 2)
+    else:
+        mid_price = (upper_price + lower_price) / 2
+        if mid_price <= 0:
+            return 2
+        step_abs_needed = mid_price * min_step_frac
+        if step_abs_needed <= 0:
+            return 2
+        levels = 1 + int(math.floor((upper_price - lower_price) / step_abs_needed))
+        levels = max(levels, 2)
+
+    if strict:
+        actual_step = compute_grid_step_pct(lower_price, upper_price, levels, grid_type)
+        if actual_step is not None and actual_step < min_step_pct:
+            raise ValueError(
+                f"Cannot satisfy min_step_pct={min_step_pct:.2f}% with range "
+                f"[{lower_price:.2f}, {upper_price:.2f}]. "
+                f"Maximum achievable step is {actual_step:.2f}% with {levels} levels."
+            )
+    return levels
 
 
 def compute_breakeven_metrics(
